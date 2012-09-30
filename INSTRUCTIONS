@@ -42,7 +42,7 @@ The build directory has links back to the subdirectories of the:
 * Directory that bob-config was run from, and
 * Directories listed in the REPOS variable in the bob config file.
 
-A typical repoitory directory structure is:
+A typical repository directory structure is:
 
 repo-root
   assorted-uninteresting-files
@@ -145,7 +145,7 @@ static-lib lib-name : public-source [: protected-source [: required-system-libs]
 
 eg: static-lib math : matrix.h alg.h : matrix.cc alg.cc : m;
 
-Specifes a static library. All the source files should be in the same language,
+Specifies a static library. All the source files should be in the same language,
 or in a language from which the library's language files can be generated.
 
 The public files are those that client code needs to import/include.
@@ -163,7 +163,7 @@ Executables defined after a dynamic library will link to the dynamic library
 rather than the static library.
 
 The contained static-libs all have to be declared in the current Bobfile
-or in a transitively contained directoy's Bobfile.
+or in a transitively contained directory's Bobfile.
 The last element can optionally be omitted if it is the same as the
 containing directory name, which is usually the case.
 
@@ -226,10 +226,10 @@ Discussion
 A major preoccupation of bob is with dependencies. This is because on large
 projects, management of dependencies is essential, and the best way to manage
 something is with a tool. If you can't build software without explicitly
-declaring a dependency, you can't sneak a dependnency in while no-one is looking.
+declaring a dependency, you can't sneak a dependency in while no-one is looking.
 
 Bob also goes further and insists on no circularities between files or directories.
-This may seem like a harch constraint, but it is a very useful design tool, and
+This may seem like a harsh constraint, but it is a very useful design tool, and
 in the experience of the writer, leads to better, more maintainable designs.
 
 
