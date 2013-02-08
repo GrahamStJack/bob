@@ -372,7 +372,7 @@ void doBailer() {
 
 extern (C) void mySignalHandler(int sig) nothrow {
     try {
-        send(bailerTid, sig);
+        bailerTid.send(sig);
     }
     catch (Exception ex) { assert(0, format("Unexpected exception: %s", ex)); }
 }
@@ -407,16 +407,16 @@ void say(A...)(string fmt, A a) {
     auto w = appender!(char[])();
     formattedWrite(w, fmt, a);
     stderr.writeln(w.data);
-    stderr.flush;
+    stderr.flush();
 }
 
 void fatal(A...)(string fmt, A a) {
     say(fmt, a);
-    launcher.bail;
+    launcher.bail();
     throw new BailException();
 }
 
-void error(A...)(ref Origin origin, string fmt, A a) {
+void error(A...)(Origin origin, string fmt, A a) {
     sayNoNewline("%s|%s| ERROR: ", origin.path, origin.line);
     fatal(fmt, a);
 }
@@ -505,7 +505,7 @@ bool isScannable(string suffix) {
 bool startsWith(string str, string[] prefixes) {
     foreach (prefix; prefixes) {
         size_t len = prefix.length;
-        if (str.length >= len && str[0..len] == prefix)
+        if (str.length >= len && str[0 .. len] == prefix)
         {
             return true;
         }
@@ -576,7 +576,7 @@ void readOptions() {
                     fatal("Commands require at least two extensions: %s", line);
                 }
                 string   input   = extensions[0];
-                string[] outputs = extensions[1..$];
+                string[] outputs = extensions[1 .. $];
 
                 errorUnless(input !in reservedExts, origin,
                             "Cannot use %s as source ext in commands", input);
@@ -610,9 +610,9 @@ void readOptions() {
                     generateCommands[input] = GenerateCommand(outputs, value);
                 }
             }
-            else if (key.length > 7 && key[0..7] == "syslib ") {
+            else if (key.length > 7 && key[0 .. 7] == "syslib ") {
                 // syslib declaration
-                SysLib.create(split(key[7..$]), split(value));
+                SysLib.create(split(key[7 .. $]), split(value));
             }
             else {
                 // A variable
@@ -684,7 +684,7 @@ Include[] scanForIncludes(string path) {
                     break;
                 case Phase.WORD:
                     if (isWhite(ch)) {
-                        if (content[anchor..i] == "include") {
+                        if (content[anchor .. i] == "include") {
                             phase = Phase.INCLUDE;
                         }
                         else {
@@ -707,9 +707,9 @@ Include[] scanForIncludes(string path) {
                     break;
                 case Phase.QUOTE:
                     if (ch == '"') {
-                        result ~= Include(content[anchor..i].idup, origin.line, true);
+                        result ~= Include(content[anchor .. i].idup, origin.line, true);
                         phase = Phase.NEXT;
-                        //say("%s: found quoted include of %s", path, content[anchor..i]);
+                        //say("%s: found quoted include of %s", path, content[anchor .. i]);
                     }
                     else if (isWhite(ch)) {
                         phase = Phase.NEXT;
@@ -717,9 +717,9 @@ Include[] scanForIncludes(string path) {
                     break;
                 case Phase.ANGLE:
                     if (ch == '>') {
-                        result ~= Include(content[anchor..i].idup, origin.line, false);
+                        result ~= Include(content[anchor .. i].idup, origin.line, false);
                         phase = Phase.NEXT;
-                        //say("%s: found system include of %s", path, content[anchor..i]);
+                        //say("%s: found system include of %s", path, content[anchor .. i]);
                     }
                     else if (isWhite(ch)) {
                         phase = Phase.NEXT;
@@ -782,7 +782,7 @@ Include[] scanForImports(string path) {
 
             if (inWord && (isWhite(ch) || ch == ':' || ch == ',' || ch == ';')) {
                 inWord = false;
-                word = content[anchor..pos];
+                word = content[anchor .. pos];
 
                 if (!inImport) {
                     if (isWhite(ch)) {
@@ -808,7 +808,7 @@ Include[] scanForImports(string path) {
                 foreach (external; externals) {
                     string ignoreStr = external ~ dirSeparator;
                     if (trail.length >= ignoreStr.length &&
-                        trail[0..ignoreStr.length] == ignoreStr)
+                        trail[0 .. ignoreStr.length] == ignoreStr)
                     {
                         ignored = true;
                         break;
@@ -891,15 +891,15 @@ Statement[] readBobfile(string path) {
         else if ((isWhite(ch) || ch == ':' || ch == ';')) {
             if (inWord) {
                 inWord = false;
-                string word = content[anchor..pos];
+                string word = content[anchor .. pos];
 
                 // should be a word in a statement
 
                 string[] words = [word];
 
-                if (word.length > 3 && word[0..2] == "${" && word[$-1] == '}') {
+                if (word.length > 3 && word[0 .. 2] == "${" && word[$-1] == '}') {
                     // macro substitution
-                    words = split(getOption(word[2..$-1]));
+                    words = split(getOption(word[2 .. $-1]));
                 }
 
                 if (word.length > 0) {
@@ -986,7 +986,7 @@ final class Action {
     bool    finalised; // true if the action command has been finalised
     bool    issued;    // true if the action has been issued to a worker
 
-    this(ref Origin origin, Pkg pkg, string name_, string command_, File[] builds_, File[] depends_) {
+    this(Origin origin, Pkg pkg, string name_, string command_, File[] builds_, File[] depends_) {
         name     = name_;
         command  = command_;
         number   = nextNumber++;
@@ -1082,7 +1082,7 @@ final class Action {
 
             // Local function to finish processing a token.
             void finishToken(size_t pos) {
-                suffix = text[anchor..pos];
+                suffix = text[anchor .. pos];
                 size_t start = result.length;
 
                 string[] values;
@@ -1141,7 +1141,7 @@ final class Action {
                 }
                 else if (inToken && ch == '{' && prev == '$') {
                     // Starting a varname within a token
-                    prefix  = text[anchor..pos-1];
+                    prefix  = text[anchor .. pos-1];
                     inCurly = true;
                     anchor  = pos + 1;
                 }
@@ -1150,7 +1150,7 @@ final class Action {
                     if (!inCurly) {
                         fatal("Unmatched '}' in '%s'", text);
                     }
-                    varname = text[anchor..pos];
+                    varname = text[anchor .. pos];
                     inCurly = false;
                     anchor  = pos + 1;
                 }
@@ -1273,7 +1273,7 @@ class Node {
     }
 
     // create a node and place it into the tree
-    this(ref Origin origin, Node parent_, string name_, Privacy privacy_) {
+    this(Origin origin, Node parent_, string name_, Privacy privacy_) {
         assert(parent_);
         errorUnless(dirName(name_) == ".", origin, "Cannot define node with multi-part name '%s'", name_);
         parent  = parent_;
@@ -1381,7 +1381,7 @@ final class Pkg : Node {
 
     File bobfile;
 
-    this(ref Origin origin, Node parent_, string name_, Privacy privacy_) {
+    this(Origin origin, Node parent_, string name_, Privacy privacy_) {
         super(origin, parent_, name_, privacy_);
         bobfile = File.addSource(origin, this, "Bobfile", Privacy.PRIVATE, false);
     }
@@ -1493,7 +1493,7 @@ class File : Node {
             action = null;
             outstanding.remove(this);
         }
-        touch;
+        touch();
     }
 
     // Scan this file for includes/imports, incorporating them into the
@@ -1562,7 +1562,7 @@ class File : Node {
 
             // totally important to touch includes AFTER we know what all of them are
             foreach (include; includes) {
-                include.touch;
+                include.touch();
             }
         }
     }
@@ -1623,7 +1623,7 @@ class File : Node {
             // give this file a chance to augment its action
             if (augmentAction()) {
                 // dependency added - touch this file again to re-check dependencies
-                touch;
+                touch();
                 return;
             }
             else {
@@ -1643,7 +1643,7 @@ class File : Node {
                             other = other.youngestDepend;
                         }
                     }
-                    action.issue;
+                    action.issue();
                     return;
                 }
                 else {
@@ -1661,7 +1661,7 @@ class File : Node {
         // This file is up to date
 
         // Scan for includes, possibly becoming clean in the process
-        if (!scanned) scan;
+        if (!scanned) scan();
         if (clean)    return;
 
         // Find out if includes are clean and what our effective mod_time is
@@ -1694,10 +1694,10 @@ class File : Node {
 
         // touch everything that includes or depends on this
         foreach (other; includedBy.byKey()) {
-            other.touch;
+            other.touch();
         }
         foreach (other; dependedBy.byKey()) {
-            other.touch;
+            other.touch();
         }
     }
 
@@ -2181,7 +2181,7 @@ void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) 
 
     if (isDir(fromPath)) {
         foreach (string path; dirEntries(fromPath, SpanMode.shallow)) {
-            miscFile(origin, pkg, buildPath(dir, name), path.baseName, dest);
+            miscFile(origin, pkg, buildPath(dir, name), path.baseName(), dest);
         }
     }
     else {
@@ -2245,7 +2245,7 @@ void processBobfile(string indent, Pkg pkg) {
     if (g_print_rules) say("%sprocessing %s", indent, pkg.bobfile);
     indent ~= "  ";
     foreach (statement; readBobfile(pkg.bobfile.path)) {
-        if (g_print_rules) say("%s%s", indent, statement.toString);
+        if (g_print_rules) say("%s%s", indent, statement.toString());
         switch (statement.rule) {
 
             case "contain":
@@ -2336,6 +2336,16 @@ void processBobfile(string indent, Pkg pkg) {
     }
 }
 
+string combineStr(in string a, in string b) {
+  return a ~ "|" ~ b;
+}
+
+void separateStr(in string a, out string b, out string c) {
+  string[] s = split(a, "|");
+  assert(s.length == 2);
+  b = s[0];
+  c = s[1];
+}
 
 //
 // Remove any files in obj, priv and dist that aren't marked as needed
@@ -2357,7 +2367,7 @@ void cleandirs() {
                     }
                     else {
                         // leaving a file in place
-                        dirs[entry.name.dirName] = true;
+                        dirs[entry.name.dirName()] = true;
                     }
                 }
                 else {
@@ -2367,7 +2377,7 @@ void cleandirs() {
                     }
                     else {
                         //say("  keeping non-empty dir %s", entry.name);
-                        dirs[entry.name.dirName] = true;
+                        dirs[entry.name.dirName()] = true;
                     }
                 }
             }
@@ -2414,7 +2424,7 @@ bool doPlanning(int numJobs,
         idlers[worker] = true;
         try {
             foreach (file; Action.byName[action].builds) {
-                file.updated;
+                file.updated();
             }
         }
         catch (BailException ex) { exiting = true; success = false; }
@@ -2429,7 +2439,7 @@ bool doPlanning(int numJobs,
 
 
     // set up some globals
-    readOptions;
+    readOptions();
     g_print_rules   = printStatements;
     g_print_deps    = printDeps;
     g_print_details = printDetails;
@@ -2452,7 +2462,7 @@ bool doPlanning(int numJobs,
         // enough to trigger building everything.
         foreach (path, file; File.byPath) {
             if (!file.built) {
-                file.touch;
+                file.touch();
             }
         }
     }
@@ -2471,7 +2481,7 @@ bool doPlanning(int numJobs,
 
             if (exiting) {
                 // tell idle worker to terminate
-                send(tid, true);
+                tid.send(true);
                 toilers ~= idler;
             }
             else if (!Action.queue.empty) {
@@ -2489,7 +2499,9 @@ bool doPlanning(int numJobs,
                     targets ~= target.path;
                 }
                 //say("issuing action %s", next.name);
-                send(tid, next.name.idup, next.command.idup, targets.idup);
+                //tid.send(next.name.idup, next.command.idup, targets.idup);
+                // Workaround for previous line:
+                tid.send(next.name.idup, (combineStr(next.command, targets)).idup);
                 toilers ~= idler;
                 ++inflight;
             }
@@ -2579,18 +2591,18 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
         if (command == "DUMMY ") {
             // Just write some text into the target file
             std.file.write(targets, "dummy");
-            send(plannerTid, myName, action);
+            plannerTid.send(myName, action);
             return;
         }
 
-        else if (command.length > 5 && command[0..5] == "TEST ") {
+        else if (command.length > 5 && command[0 .. 5] == "TEST ") {
             // Do test preparation - choose tmp dir and remove it
             isTest = true;
             tmpPath = buildPath("tmp", myName ~ "-test");
             if (exists(tmpPath)) {
                 rmdirRecurse(tmpPath);
             }
-            command = command[5..$];
+            command = command[5 .. $];
         }
 
         string[] targs = split(targets, "|");
@@ -2609,7 +2621,7 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
         launcher.completed(myName);
 
         if (!success) {
-            bool bailed = launcher.bail;
+            bool bailed = launcher.bail();
 
             // delete built files so the failure is tidy
             foreach (target; targs) {
@@ -2644,16 +2656,24 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
             }
 
             // tell planner the action succeeded
-            send(plannerTid, myName, action);
+            plannerTid.send(myName, action);
         }
     }
 
 
     try {
-        send(plannerTid, myName);
+        plannerTid.send(myName);
         bool done;
         while (!done) {
-            receive( (string action, string command, string targets) { perform(action, command, targets); },
+            //receive( (string action, string command, string targets) { perform(action, command, targets); },
+            // Workaround for previous line:
+            receive( (string action, string command_targets)
+                    {
+                      string command;
+                      string targets;
+                      separateStr(command_targets, command, targets);
+                      perform(action, command, targets);
+                    },
                      (bool dummy)                                    { done = true; });
         }
     }
@@ -2662,7 +2682,7 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
 
     // tell planner we are terminating
     //say("%s terminating", myName);
-    send(plannerTid, myName);
+    plannerTid.send(myName);
 }
 
 
@@ -2707,7 +2727,7 @@ int main(string[] args) {
 
         if (args.length != 1) {
             say("Option processing failed. There are %s unprocessed argument(s): ", args.length - 1);
-            foreach (uint i, arg; args[1..args.length]) {
+            foreach (uint i, arg; args[1 .. args.length]) {
                 say("  %s. \"%s\"", i + 1, arg);
             }
             returnValue = 2;
@@ -2740,7 +2760,7 @@ int main(string[] args) {
                 string[] tokens = split(line, "=");
                 if (tokens.length == 2 && tokens[0][0] != '#') {
                     if (tokens[1][0] == '"') {
-                        tokens[1] = tokens[1][1..$-1];
+                        tokens[1] = tokens[1][1 .. $-1];
                     }
                     setenv(toStringz(tokens[0]), toStringz(tokens[1]), 1);
                 }
@@ -2748,7 +2768,7 @@ int main(string[] args) {
         }
 
         // spawn the workers
-        foreach (uint i; 0..numJobs) {
+        foreach (uint i; 0 .. numJobs) {
             //say("spawning worker %s", i);
             spawn(&doWork, printActions, i, thisTid);
         }
