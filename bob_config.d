@@ -37,29 +37,66 @@ import std.getopt;
 import std.path;
 import std.file;
 import std.stdio;
-import std.process;
 import std.conv;
 import std.ascii;
 
+import process;
+
 import core.stdc.stdlib;
-import core.sys.posix.sys.stat;
+
+//
+// Some platform-dependent stuff
+//
+version(Posix) {
+    import core.sys.posix.sys.stat;
+    import core.sys.posix.unistd;
+
+    // Set the mode of a file
+    private void setMode(string path, bool executable) {
+        chmod(toStringz(path), executable ? octal!744 : octal!644);
+    }
+
+    // Make a symbolic link
+    private void makeSymlink(string dest, string linkname) {
+        writefln("making link %s to %s", linkname, dest);
+        symlink(dest, linkname);
+    }
+
+    string ENV_DELIM  = ":";
+    string ENV_PREFIX = "";
+
+    string CLEAN_TEXT = "rm -rf dist priv obj tmp\n";
+}
+version(Windows) {
+
+    // Set the mode of a file
+    private void setMode(string path, bool executable) {
+        // Setting a file executable is all about the extension in windows,
+        // and we let the user decide the filename - so nothing to do.
+    }
+
+    // Make a symbolic link
+    private void makeSymlink(string dest, string linkname) {
+        writefln("making link %s to %s", linkname, dest);
+
+        string command = format("mklink /D %s %s", linkname, dest);
+        int ret = std.c.process.system(toStringz(command));
+        assert(ret == 0, format("Failed to execute: %s", command));
+    }
+
+    string ENV_DELIM = ";";
+    string ENV_PREFIX = "set ";
+
+    string CLEAN_TEXT = "rmdir /s dist priv obj tmp\n";
+}
+
 
 // TODO
-// * Use the new std.process module when it becomes available to
-//   do all the interaction with environment variables.
-// * Port to Windows.
 // * Add checking for external dependencies.
 
 //================================================================
 // Helpers
 //================================================================
-
-//
-// Set the mode of a file
-//
-private void setMode(string path, uint mode) {
-    chmod(toStringz(path), mode);
-}
 
 
 //
@@ -106,28 +143,29 @@ private void append(ref Vars vars, string name, string[] extra, AppendType appen
             vars[name] ~= item;
         }
     }
-    //writefln("%s = %s", name, vars[name]);
 }
 
 
 //
-// Return a string to set an environment variable from a bob variable.
+// Return a string to set an environment variable from one or more bob variables.
 //
-string toEnv(string envName, const ref Vars vars, string varName, string[] extras) {
+string toEnv(string envName, const ref Vars vars, string[] varNames, string[] extras) {
     string result;
     bool[string] got;
     string[] candidates = extras;
-    if (varName in vars) {
-        candidates ~= vars[varName];
+    foreach (name; varNames) {
+        if (name in vars) {
+            candidates ~= vars[name];
+        }
     }
     foreach (token; candidates) {
         if (token !in got) {
             got[token] = true;
-            result ~= token ~ ":";
+            result ~= token ~ ENV_DELIM;
         }
     }
     if (result) {
-        result = envName ~ "=\"" ~ result[0..$-1] ~ "\"\n";
+        result = ENV_PREFIX ~ envName ~ "=\"" ~ result[0..$-ENV_DELIM.length] ~ "\"\n";
     }
     return result;
 }
@@ -137,7 +175,7 @@ string toEnv(string envName, const ref Vars vars, string varName, string[] extra
 // Return an array of strings parsed from an environment variable.
 //
 string[] fromEnv(string varname) {
-    return split(std.process.getenv(varname), ":");
+    return split(environment.get(varname), ENV_DELIM);
 }
 
 
@@ -151,11 +189,7 @@ void update(string path, string content, bool executable) {
         std.file.write(path, content);
     }
 
-    uint mode = executable ? octal!744 : octal!644;
-    uint attr = getAttributes(path);
-    if (attr != mode) {
-        setMode(path, mode);
-    }
+    setMode(path, executable);
 }
 
 
@@ -194,7 +228,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
 
     // Create clean script.
-    update(buildPath(buildDir, "clean"), "rm -rf ./dist ./priv ./obj ./tmp\n", true);
+    update(buildPath(buildDir, "clean"), CLEAN_TEXT, true);
 
 
     // Create environment file.
@@ -203,17 +237,26 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     string data = buildPath(buildDir, "dist", "data");
     string env  = buildPath(buildDir, "environment");
     string envText;
-    envText ~= "#!/bin/bash\n";
-    envText ~= toEnv("LD_LIBRARY_PATH", vars, "SYS_LIB",  [lib] ~ fromEnv("LD_LIBRARY_PATH"));
-    envText ~= toEnv("PATH",            vars, "SYS_PATH", [bin] ~ fromEnv("PATH"));
+    version(Posix) {
+        envText ~= "#!/bin/bash\n";
+        envText ~= toEnv("LD_LIBRARY_PATH", vars, ["SYS_LIB"],  [lib] ~ fromEnv("LD_LIBRARY_PATH"));
+        envText ~= toEnv("PATH",            vars, ["SYS_PATH"], [bin] ~ fromEnv("PATH"));
+    }
+    version(Windows) {
+        envText ~= toEnv("PATH", vars, ["SYS_LIB", "SYS_PATH"], [lib, bin] ~ fromEnv("PATH"));
+    }
     envText ~= "DIST_DATA_PATH=\"" ~ data ~ "\"\n";
     update(env, envText, false);
 
 
     // Create run script
-    update(buildPath(buildDir, "run"),
-           "#!/bin/bash\nsource " ~ env ~ "\nexec \"$@\"\n",
-           true);
+    version(Posix) {
+        string runText = "#!/bin/bash\nsource " ~ env ~ "\nexec \"$@\"\n";
+    }
+    version(Windows) {
+        string runText = "%1%";
+    }
+    update(buildPath(buildDir, "run"), runText, true);
 
 
     //
@@ -309,8 +352,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     getReferences(projectPath);
 
     foreach (name, path; pkgPaths) {
-        string linkPath = buildPath(localSrcPath, name);
-        system(format("ln -sfn %s %s", path, linkPath));
+        makeSymlink(path, buildPath(localSrcPath, name));
     }
 
     // print success
@@ -438,7 +480,7 @@ int main(string[] args) {
     }
 
     string buildDir = args[1];
-    string srcDir   = getcwd();
+    string srcDir   = std.path.getcwd();
 
 
     //

@@ -157,9 +157,9 @@ import std.exception;
 version(Posix) {
     import core.sys.posix.signal;
 
-    string copyCmd = "cp";
+    string copyCmd = "cp -f";
 
-    int mykill(pid_t pid, int sig) {
+    int mykill(int pid, int sig) {
         return kill(pid, sig);
     }
 }
@@ -172,9 +172,9 @@ else version(Windows) {
 
     import core.stdc.signal;
 
-    string copyCmd = "copy";
+    string copyCmd = "copy /Y";
 
-    int mykill(pid_t pid, int sig) {
+    int mykill(int pid, int sig) {
         return 0;
     }
 }
@@ -336,16 +336,15 @@ shared static this() {
 __gshared Tid bailerTid;
 
 void doBailer() {
-    void bail(int sig) {
-        killer.bail();
+    try {
+        bool done;
+        while (!done) {
+            receive( (int sig)      { killer.bail(); },
+                    (string dummy) { done = true; }
+                   );
+        }
     }
-
-    bool done;
-    while (!done) {
-        receive( (int sig)      { bail(sig); },
-                 (string dummy) { done = true; }
-               );
-    }
+    catch (Exception ex) {}
 }
 
 extern (C) void mySignalHandler(int sig) nothrow {
@@ -359,7 +358,9 @@ shared static this() {
     bailerTid = spawn(&doBailer);
 
     signal(SIGINT, &mySignalHandler);
-    signal(SIGHUP, &mySignalHandler);
+    version(Posix) {
+        signal(SIGHUP, &mySignalHandler);
+    }
 }
 
 
@@ -435,6 +436,24 @@ void ensureParent(string path) {
         }
         doesExist[path] = true;
     }
+}
+
+
+//
+// Return a copy of the given relative path trail that has the
+// appropriate directory separators for this platform.
+//
+string fixTrail(const char[] trail) {
+    char[] fixed = trail.dup;
+
+    assert(dirSeparator.length == 1);
+    foreach (ref c; fixed) {
+        if ((c == '/' || c == '\\') && c != dirSeparator[0]) {
+            c = dirSeparator[0];
+        }
+    }
+
+    return cast(immutable(char)[]) fixed;
 }
 
 
@@ -693,7 +712,7 @@ Include[] scanForIncludes(string path) {
                     break;
                 case Phase.QUOTE:
                     if (ch == '"') {
-                        result ~= Include(content[anchor .. i].idup, origin.line, true);
+                        result ~= Include(fixTrail(content[anchor .. i]), origin.line, true);
                         phase = Phase.NEXT;
                         //say("%s: found quoted include of %s", path, content[anchor .. i]);
                     }
@@ -703,7 +722,7 @@ Include[] scanForIncludes(string path) {
                     break;
                 case Phase.ANGLE:
                     if (ch == '>') {
-                        result ~= Include(content[anchor .. i].idup, origin.line, false);
+                        result ~= Include(fixTrail(content[anchor .. i]), origin.line, false);
                         phase = Phase.NEXT;
                         //say("%s: found system include of %s", path, content[anchor .. i]);
                     }
@@ -2667,11 +2686,17 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
         // launch child process to do the action, then wait for it to complete
 
         auto output = std.stdio.File(resultsPath, "w");
-        Pid  child  = spawnProcess(command, std.stdio.stdin, output, output);
+        try {
+            Pid  child = spawnProcess(command, std.stdio.stdin, output, output);
 
-        killer.launched(myName, child);
-        success = wait(child) == 0;
-        killer.completed(myName, child);
+            killer.launched(myName, child);
+            success = wait(child) == 0;
+            killer.completed(myName, child);
+        }
+        catch (Exception ex) {
+            success = false;
+            say(ex.msg);
+        }
 
         if (!success) {
             // delete built files so the failure is tidy
@@ -2732,7 +2757,7 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
         }
     }
     catch (BailException) {}
-    catch (Exception ex)  { say("Unexpected exception %s", ex); }
+    catch (Exception ex)  { say("Unexpected exception: %s", ex.msg); }
 
     // tell planner we are terminating
     //say("%s terminating", myName);
@@ -2836,7 +2861,7 @@ int main(string[] args) {
         return returnValue;
     }
     catch (Exception ex) {
-        say("got unexpected exception %s", ex);
+        say("Got unexpected exception: %s", ex.msg);
         return 1;
     }
 }

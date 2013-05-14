@@ -1,0 +1,2 @@
+This directory contains a copy of the posix example, cut down to avoid
+issues like scripts and rst2html.
