@@ -2417,16 +2417,6 @@ void processBobfile(string indent, Pkg pkg) {
     }
 }
 
-string combineStr(in string a, in string b) {
-  return a ~ "|" ~ b;
-}
-
-void separateStr(in string a, out string b, out string c) {
-  string[] s = split(a, "|");
-  assert(s.length == 2);
-  b = s[0];
-  c = s[1];
-}
 
 //
 // Remove any files in obj, priv and dist that aren't marked as needed
@@ -2578,9 +2568,7 @@ bool doPlanning(int numJobs,
                     targets ~= target.path;
                 }
                 //say("issuing action %s", next.name);
-                //tid.send(next.name.idup, next.command.idup, targets.idup);
-                // Workaround for previous line:
-                tid.send(next.name.idup, (combineStr(next.command, targets)).idup);
+                tid.send(next.name.idup, next.command.idup, targets.idup);
                 toilers ~= idler;
                 ++inflight;
             }
@@ -2721,14 +2709,8 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
         plannerTid.send(myName);
         bool done;
         while (!done) {
-            receive( (string action, string command_targets)
-                    {
-                      string command;
-                      string targets;
-                      separateStr(command_targets, command, targets);
-                      perform(action, command, targets);
-                    },
-                    (bool dummy) { done = true; });
+            receive( (string action, string command, string targets) { perform(action, command, targets); },
+                     (bool dummy) { done = true; } );
         }
     }
     catch (BailException) {}
