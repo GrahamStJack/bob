@@ -218,7 +218,7 @@ Executable
 
 dist-exe exe-name : source;
 test-exe exe-name : source;
-util-exe exe-name : source;
+priv-exe exe-name : source;
 
 eg: test-exe math-test : math_test.cpp;
 

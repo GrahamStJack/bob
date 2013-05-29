@@ -1709,7 +1709,7 @@ class File : Node {
         // all owr down-stream includes are clean.
         resolveIncludes();
 
-        // We are now sqeaky clean
+        // We are now squeaky clean
         clean = true;
 
         // touch everything that includes or depends on this
