@@ -39,8 +39,7 @@ import std.file;
 import std.stdio;
 import std.conv;
 import std.ascii;
-
-import process;
+import std.process;
 
 import core.stdc.stdlib;
 

@@ -133,7 +133,7 @@ after they are up to date, and the dependency graph and action commands are
 adjusted accordingly.
 */
 
-import process;
+import concurrency;
 
 import std.stdio;
 import std.ascii;
@@ -146,9 +146,9 @@ import std.path;
 import std.conv;
 import std.datetime;
 import std.getopt;
-import std.concurrency;
 import std.functional;
 import std.exception;
+import std.process;
 
 //----------------------------------------------------------------------------------------
 // Platform-specific stuff
@@ -328,34 +328,49 @@ shared static this() {
     killer = new Killer();
 }
 
+//-----------------------------------------------------------------------
+// Inter-thread commmunication protocols.
+//-----------------------------------------------------------------------
+
+alias Protocol!(Message!("work",
+                         string, "action",
+                         string, "command",
+                         string, "targets")) WorkerProtocol;
+
+alias Protocol!(Message!("success",
+                         string, "action"),
+                Message!("bailed")) PlannerProtocol;
 
 //-----------------------------------------------------------------------
 // Signal handling to bail on SIGINT or SIGHUP.
 //-----------------------------------------------------------------------
 
-__gshared Tid bailerTid;
+__gshared Channel!int bailerChannel;
 
 void doBailer() {
     try {
-        bool done;
-        while (!done) {
-            receive( (int sig)      { killer.bail(); },
-                    (string dummy) { done = true; }
-                   );
+        while (true) {
+            int sig = bailerChannel.receive();
+            say("Got signal %s", sig);
+            killer.bail();
         }
     }
-    catch (Exception ex) {}
+    catch (ChannelFinalized ex) { /* Normal exit. */ }
+    catch (Exception ex) {
+        say("Got unexpected exception %s", ex);
+    }
 }
 
 extern (C) void mySignalHandler(int sig) nothrow {
     try {
-        bailerTid.send(sig);
+        bailerChannel.send(sig);
     }
     catch (Exception ex) { assert(0, format("Unexpected exception: %s", ex)); }
 }
 
 shared static this() {
-    bailerTid = spawn(&doBailer);
+    bailerChannel = new Channel!(int)(100);
+    spawn(&doBailer);
 
     signal(SIGINT, &mySignalHandler);
     version(Posix) {
@@ -1186,7 +1201,7 @@ final class Action {
             if (inToken) {
                 finishToken(text.length);
             }
-            return result;
+            return result.strip();
         }
 
         command = resolve(command);
@@ -1530,9 +1545,7 @@ class File : Node {
 
             // scan for includes
             Include[] entries;
-            string ext = extension(path);
-
-            switch (ext) {
+            switch (path.extension()) {
               case ".c":
               case ".h":
               case ".cc":
@@ -2492,49 +2505,22 @@ void cleandirs() {
 //
 // Planner function
 //
-bool doPlanning(int numJobs,
-                bool printStatements,
-                bool printDeps,
-                bool printDetails) {
+bool doPlanning(uint                 numWorkers,
+                bool                 printStatements,
+                bool                 printDeps,
+                bool                 printDetails,
+                PlannerProtocol.Chan plannerChannel,
+                WorkerProtocol.Chan  workerChannel) {
 
     // state variables
-    size_t       inflight;
-    bool[string] workers;
-    bool[string] idlers;
-    bool         exiting;
-    bool         success = true;
-
-
-    // receive registration message from each worker and remember its name
-    while (workers.length < numJobs) {
-        receive( (string worker) { workers[worker] = true; idlers[worker] = true; } );
-    }
+    uint inflight;
+    bool exiting;
+    bool success = true;
 
     // Ensure tmp exists so the workers have a sandbox.
     if (!exists("tmp")) {
         mkdir("tmp");
     }
-
-    // local function: an action has completed successfully - update all files built by it
-    void actionCompleted(string worker, string action) {
-        //say("%s %s succeeded", action, worker);
-        --inflight;
-        idlers[worker] = true;
-        try {
-            foreach (file; Action.byName[action].builds) {
-                file.updated();
-            }
-        }
-        catch (BailException ex) { exiting = true; success = false; }
-    }
-
-    // local function: a worker has terminated - remove it from workers and remember we are exiting
-    void workerTerminated(string worker) {
-        exiting = true;
-        workers.remove(worker);
-        //say("%s has terminated - %s workers remaining", worker, workers.length);
-    }
-
 
     // set up some globals
     readOptions();
@@ -2566,62 +2552,62 @@ bool doPlanning(int numJobs,
     }
     catch (BailException ex) { exiting = true; success = false; }
 
-    while (workers.length) {
+    while (!exiting && File.outstanding.length) {
 
-        // give any idle workers something to do
-        //say("%s idle workers and %s actions in priority queue", idlers.length, Action.queue.length);
-        string[] toilers;
-        foreach (idler, dummy; idlers) {
+        // Issue more actions till inflight matches number of workers.
+        while (inflight < numWorkers && !Action.queue.empty) {
+            const Action next = Action.queue.front();
+            Action.queue.popFront();
 
-            if (!exiting && !File.outstanding.length) exiting = true;
-
-            Tid tid = std.concurrency.locate(idler);
-
-            if (exiting) {
-                // tell idle worker to terminate
-                tid.send(true);
-                toilers ~= idler;
-            }
-            else if (!Action.queue.empty) {
-                // give idle worker an action to perform
-
-                const Action next = Action.queue.front();
-                Action.queue.popFront();
-
-                string targets;
-                foreach (target; next.builds) {
-                    ensureParent(target.path);
-                    if (targets.length > 0) {
-                        targets ~= "|";
-                    }
-                    targets ~= target.path;
+            string targets;
+            foreach (target; next.builds) {
+                ensureParent(target.path);
+                if (targets.length > 0) {
+                    targets ~= "|";
                 }
-                //say("issuing action %s", next.name);
-                tid.send(next.name.idup, next.command.idup, targets.idup);
-                toilers ~= idler;
-                ++inflight;
+                targets ~= target.path;
             }
-            else if (!inflight) {
-                fatal("nothing to do and no inflight actions");
+            WorkerProtocol.sendWork(workerChannel, next.name, next.command, targets);
+            ++inflight;
+        }
+
+        if (!inflight) {
+            fatal("Nothing to do and no inflight actions");
+        }
+
+        // Wait for a worker to report back.
+        auto msg = plannerChannel.receive();
+        final switch (msg.type) {
+            case PlannerProtocol.Type.Success:
+            {
+                //say("%s %s succeeded", action, worker);
+                --inflight;
+                try {
+                    foreach (file; Action.byName[msg.success.action].builds) {
+                        file.updated();
+                    }
+                }
+                catch (BailException ex) {
+                    exiting = true;
+                    success = false;
+                }
+                break;
             }
-            else {
-                // nothing to do
-                //say("nothing to do - waiting for results");
+            case PlannerProtocol.Type.Bailed:
+            {
+                exiting = true;
+                success = false;
                 break;
             }
         }
-        foreach (toiler; toilers) idlers.remove(toiler);
-
-        // Receive a completion or failure.
-        receive( (string worker, string action) { actionCompleted(worker, action); },
-                 (string worker)                { workerTerminated(worker); } );
     }
 
-    // Shut down the bailer.
-    send(bailerTid, "goodnight");
+    // Shut down the bailer and all the workers.
+    bailerChannel.finalize();
+    workerChannel.finalize();
 
-    // Print some statistics.
     if (!File.outstanding.length && success) {
+        // Print some statistics and report success.
         say("\n"
             "Total number of files:             %s\n"
             "Number of target files:            %s\n"
@@ -2629,6 +2615,8 @@ bool doPlanning(int numJobs,
             File.byPath.length, File.numBuilt, File.numUpdated);
         return true;
     }
+
+    // Report failure.
     return false;
 }
 
@@ -2638,11 +2626,13 @@ bool doPlanning(int numJobs,
 //-----------------------------------------------------
 
 
-void doWork(bool printActions, uint index, Tid plannerTid) {
+void doWork(bool                 printActions,
+            uint                 index,
+            PlannerProtocol.Chan plannerChannel,
+            WorkerProtocol.Chan  workerChannel) {
     bool success;
 
     string myName = format("worker%d", index);
-    std.concurrency.register(myName, thisTid);
     //say("%s starting", myName);
 
     string resultsPath = buildPath("tmp", myName);
@@ -2656,10 +2646,11 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
 
         bool isTest = command.length > 5 && command[0 .. 5] == "TEST ";
 
-        if (command == "DUMMY ") {
+        if (command == "DUMMY") {
             // Just write some text into the target file
             std.file.write(targets, "dummy");
-            plannerTid.send(myName, action);
+            say("Sending result of dummy action %s", action);
+            PlannerProtocol.sendSuccess(plannerChannel, action);
             return;
         }
 
@@ -2685,7 +2676,9 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
 
         auto output = std.stdio.File(resultsPath, "w");
         try {
-            Pid  child = spawnProcess(command, std.stdio.stdin, output, output);
+            auto splitCommand = split(command); // TODO handle quoted args
+
+            Pid child = spawnProcess(splitCommand, std.stdio.stdin, output, output);
 
             killer.launched(myName, child);
             success = wait(child) == 0;
@@ -2735,25 +2728,25 @@ void doWork(bool printActions, uint index, Tid plannerTid) {
             }
 
             // tell planner the action succeeded
-            plannerTid.send(myName, action);
+            PlannerProtocol.sendSuccess(plannerChannel, action);
         }
     }
 
 
     try {
-        plannerTid.send(myName);
-        bool done;
-        while (!done) {
-            receive( (string action, string command, string targets) { perform(action, command, targets); },
-                     (bool dummy) { done = true; } );
+        while (true) {
+            auto msg = workerChannel.receive();
+            final switch (msg.type) {
+                case WorkerProtocol.Type.Work:
+                {
+                    perform(msg.work.action, msg.work.command, msg.work.targets);
+                }
+            }
         }
     }
-    catch (BailException) {}
+    catch (ChannelFinalized ex) { /* Normal exit */ }
+    catch (BailException) { PlannerProtocol.sendBailed(plannerChannel); }
     catch (Exception ex)  { say("Unexpected exception: %s", ex.msg); }
-
-    // tell planner we are terminating
-    //say("%s terminating", myName);
-    plannerTid.send(myName);
 }
 
 
@@ -2807,6 +2800,10 @@ int main(string[] args) {
             returnValue = 2;
             say("Must allow at least one job!");
         }
+        if (numJobs > 20) {
+            say("Clamping number of jobs at 20");
+            numJobs = 20;
+        }
         if (returnValue != 0 || help) {
             say("Usage:  bob [options]\n"
                 "  --statements     print statements\n"
@@ -2833,22 +2830,26 @@ int main(string[] args) {
                     if (tokens[1][0] == '"') {
                         tokens[1] = tokens[1][1 .. $-1];
                     }
-                    Environment[tokens[0]] = tokens[1];
+                    environment[tokens[0]] = tokens[1];
                 }
             }
         }
 
+        auto plannerChannel = new PlannerProtocol.Chan(100);
+        auto workerChannel  = new WorkerProtocol.Chan(100);
+
         // spawn the workers
         foreach (uint i; 0 .. numJobs) {
-            //say("spawning worker %s", i);
-            spawn(&doWork, printActions, i, thisTid);
+            spawn(&doWork, printActions, i, plannerChannel, workerChannel);
         }
 
         // build everything
         returnValue = doPlanning(numJobs,
                                  printStatements,
                                  printDeps,
-                                 printDetails) ? 0 : 1;
+                                 printDetails,
+                                 plannerChannel,
+                                 workerChannel) ? 0 : 1;
 
         return returnValue;
     }
