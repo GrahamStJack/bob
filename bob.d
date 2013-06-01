@@ -370,7 +370,6 @@ extern (C) void mySignalHandler(int sig) nothrow {
 
 shared static this() {
     bailerChannel = new Channel!(int)(100);
-    spawn(&doBailer);
 
     signal(SIGINT, &mySignalHandler);
     version(Posix) {
@@ -1393,23 +1392,23 @@ class Node {
     // * Nodes whose selves or ancestors have not been referred to by our parent.
     // Also can't explicitly refer to children - you get that implicitly.
     final void addReference(ref Origin origin, Node other, string cause = null) {
-        errorUnless(other !is null,
-                    origin, "%s cannot refer to NULL node", this);
+        errorUnless(other !is null, origin,
+                    "%s cannot refer to NULL node", this);
 
-        errorUnless(other != this,
-                    origin, "%s cannot refer to self", this);
+        errorUnless(other != this, origin,
+                    "%s cannot refer to self", this);
 
-        errorUnless(!this.isDescendantOf(other),
-                    origin, "%s cannot refer to ancestor %s", this, other);
+        errorUnless(!this.isDescendantOf(other), origin,
+                    "%s cannot refer to ancestor %s", this, other);
 
-        errorUnless(!other.isDescendantOf(this),
-                    origin, "%s cannnot explicitly refer to descendant %s", this, other);
+        errorUnless(!other.isDescendantOf(this), origin,
+                    "%s cannnot explicitly refer to descendant %s", this, other);
 
-        errorUnless(this.parent.allowsRefTo(origin, other),
-                    origin, "Parent %s does not allow %s to refer to %s", parent, this, other);
+        errorUnless(this.parent.allowsRefTo(origin, other), origin,
+                    "Parent %s does not allow %s to refer to %s", parent, this, other);
 
-        errorUnless(!other.allowsRefTo(origin, this),
-                    origin, "%s cannot refer to %s because of a circularity", this, other);
+        errorUnless(!other.allowsRefTo(origin, this), origin,
+                    "%s cannot refer to %s because of a circularity", this, other);
 
         if (g_print_deps) say("%s refers to %s%s", this, other, cause);
         refers ~= other;
@@ -1593,10 +1592,26 @@ class File : Node {
                 }
                 errorUnless(include !is null,
                             origin,
-                            "included/imported unknown file %s",
+                            "Included/imported unknown file %s",
                             entry.trail);
 
-                // add the include
+                // Check for a circular include
+                bool[File] checked;
+                void checkCircularity(File other) {
+                    if (g_print_deps) say("  Examining %s", other);
+                    errorUnless(other !is this, origin,
+                                "Circular include. Use --deps to see explanation");
+                    if (other !in checked) {
+                        foreach (next; other.includes.keys) {
+                            checkCircularity(next);
+                        }
+                        checked[other] = true;
+                    }
+                }
+                if (g_print_deps) say("Checking if %s include of %s is circular", this, *include);
+                checkCircularity(*include);
+
+                // Add the include
                 if (g_print_deps) say("%s includes/imports %s", this.path, include.path);
                 includes[*include] = origin;
                 include.includedBy[this] = true;
@@ -1682,7 +1697,7 @@ class File : Node {
     // Work out if this File's state should change, and if its Action should be issued.
     final void touch() {
         if (clean) return;
-        if (g_print_details) say("touching %s", path);
+        if (g_print_details) say("Touching %s", path);
         long newest;
 
         if (action && !action.issued) {
@@ -2512,10 +2527,7 @@ bool doPlanning(uint                 numWorkers,
                 PlannerProtocol.Chan plannerChannel,
                 WorkerProtocol.Chan  workerChannel) {
 
-    // state variables
     uint inflight;
-    bool exiting;
-    bool success = true;
 
     // Ensure tmp exists so the workers have a sandbox.
     if (!exists("tmp")) {
@@ -2549,64 +2561,53 @@ bool doPlanning(uint                 numWorkers,
                 file.touch();
             }
         }
-    }
-    catch (BailException ex) { exiting = true; success = false; }
 
-    while (!exiting && File.outstanding.length) {
+        while (File.outstanding.length) {
 
-        // Issue more actions till inflight matches number of workers.
-        while (inflight < numWorkers && !Action.queue.empty) {
-            const Action next = Action.queue.front();
-            Action.queue.popFront();
+            // Issue more actions till inflight matches number of workers.
+            while (inflight < numWorkers && !Action.queue.empty) {
+                const Action next = Action.queue.front();
+                Action.queue.popFront();
 
-            string targets;
-            foreach (target; next.builds) {
-                ensureParent(target.path);
-                if (targets.length > 0) {
-                    targets ~= "|";
+                string targets;
+                foreach (target; next.builds) {
+                    ensureParent(target.path);
+                    if (targets.length > 0) {
+                        targets ~= "|";
+                    }
+                    targets ~= target.path;
                 }
-                targets ~= target.path;
+                WorkerProtocol.sendWork(workerChannel, next.name, next.command, targets);
+                ++inflight;
             }
-            WorkerProtocol.sendWork(workerChannel, next.name, next.command, targets);
-            ++inflight;
-        }
 
-        if (!inflight) {
-            fatal("Nothing to do and no inflight actions");
-        }
+            if (!inflight) {
+                fatal("Nothing to do and no inflight actions - something is wrong");
+            }
 
-        // Wait for a worker to report back.
-        auto msg = plannerChannel.receive();
-        final switch (msg.type) {
-            case PlannerProtocol.Type.Success:
-            {
-                //say("%s %s succeeded", action, worker);
-                --inflight;
-                try {
+            // Wait for a worker to report back.
+            auto msg = plannerChannel.receive();
+            final switch (msg.type) {
+                case PlannerProtocol.Type.Success:
+                {
+                    --inflight;
                     foreach (file; Action.byName[msg.success.action].builds) {
                         file.updated();
                     }
+                    break;
                 }
-                catch (BailException ex) {
-                    exiting = true;
-                    success = false;
+                case PlannerProtocol.Type.Bailed:
+                {
+                    fatal("Aborting build due to action failure.");
+                    break;
                 }
-                break;
-            }
-            case PlannerProtocol.Type.Bailed:
-            {
-                exiting = true;
-                success = false;
-                break;
             }
         }
     }
+    catch (BailException ex) {}
+    catch (Exception ex) { say("Unexpected exception %s", ex); }
 
-    // Shut down the bailer and all the workers.
-    bailerChannel.finalize();
-    workerChannel.finalize();
-
-    if (!File.outstanding.length && success) {
+    if (!File.outstanding.length) {
         // Print some statistics and report success.
         say("\n"
             "Total number of files:             %s\n"
@@ -2693,7 +2694,7 @@ void doWork(bool                 printActions,
             // delete built files so the failure is tidy
             foreach (target; targs) {
                 if (exists(target)) {
-                    say("  Deleting %s", target);
+                    say("Deleting %s", target);
                     std.file.remove(target);
                 }
             }
@@ -2704,7 +2705,6 @@ void doWork(bool                 printActions,
                 // Print error message
                 say("\n%s", readText(resultsPath));
                 say("%s: FAILED\n%s", action, command);
-                say("Aborting build due to action failure");
             }
             throw new BailException();
         }
@@ -2837,19 +2837,25 @@ int main(string[] args) {
 
         auto plannerChannel = new PlannerProtocol.Chan(100);
         auto workerChannel  = new WorkerProtocol.Chan(100);
+        // bailerChannel is used by mySignalHandler, so we create that statically.
 
-        // spawn the workers
+        // Spawn the bailer and workers
+        spawn(&doBailer);
         foreach (uint i; 0 .. numJobs) {
             spawn(&doWork, printActions, i, plannerChannel, workerChannel);
         }
 
-        // build everything
+        // Build everything
         returnValue = doPlanning(numJobs,
                                  printStatements,
                                  printDeps,
                                  printDetails,
                                  plannerChannel,
                                  workerChannel) ? 0 : 1;
+
+        // Shut down the bailer and all the workers.
+        bailerChannel.finalize();
+        workerChannel.finalize();
 
         return returnValue;
     }
