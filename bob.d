@@ -1597,19 +1597,17 @@ class File : Node {
 
                 // Check for a circular include
                 bool[File] checked;
-                void checkCircularity(File other) {
-                    if (g_print_deps) say("  Examining %s", other);
+                void checkCircularity(File other, string explanation) {
                     errorUnless(other !is this, origin,
-                                "Circular include. Use --deps to see explanation");
+                                "Circular include: %s", explanation);
                     if (other !in checked) {
                         foreach (next; other.includes.keys) {
-                            checkCircularity(next);
+                            checkCircularity(next, explanation ~ " -> " ~ next.path);
                         }
                         checked[other] = true;
                     }
                 }
-                if (g_print_deps) say("Checking if %s include of %s is circular", this, *include);
-                checkCircularity(*include);
+                checkCircularity(*include, path ~ " -> " ~ include.path);
 
                 // Add the include
                 if (g_print_deps) say("%s includes/imports %s", this.path, include.path);
