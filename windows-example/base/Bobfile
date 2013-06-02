@@ -1,0 +1,19 @@
+static-lib low : macros.h;
+
+public-lib mid :
+                one.h two.h
+               :
+                one.c two.cpp
+               ;
+
+test-exe test-one : test_one.cpp;
+test-exe test-two : test_two.cpp;
+
+dynamic-lib base : low mid;
+
+
+public-lib extra : extra.h : extra.cpp;
+
+dynamic-lib extra : extra;
+
+test-exe test-extra : test_extra.cpp;

@@ -156,11 +156,27 @@ import std.process;
 
 version(Posix) {
     import core.sys.posix.signal;
-
-    string copyCmd = "cp -f";
+    import core.sys.posix.sys.stat;
+    import core.sys.posix.unistd;
 
     int mykill(int pid, int sig) {
         return kill(pid, sig);
+    }
+
+    // If source is executable for user, make target executable by user.
+    private void setExecutableIf(string target, string source) {
+        stat_t sourceStat;
+        int rc = stat(toStringz(source), &sourceStat);
+        if (rc != 0) fatal("Unable to stat %s", source);
+        if (sourceStat.st_mode & S_IXUSR) {
+            // source is executable - make target executable
+            stat_t targetStat;
+            rc = stat(toStringz(target), &targetStat);
+            if (rc != 0) fatal("Unable to stat %s", target);
+            targetStat.st_mode |= S_IXUSR;
+            rc = chmod(toStringz(target), targetStat.st_mode);
+            if (rc != 0) fatal("Unable to chmod %s", target);
+        }
     }
 }
 else version(Windows) {
@@ -171,8 +187,6 @@ else version(Windows) {
     // The work in progress is all those little issues like slash vs backslash.
 
     import core.stdc.signal;
-
-    string copyCmd = "copy /Y";
 
     int mykill(int pid, int sig) {
         return 0;
@@ -1747,7 +1761,7 @@ class File : Node {
             return;
         }
         errorUnless(modTime > 0, Origin(path, 1),
-                    "%s (%s) is up to date with zero mod_time!", path, trail);
+                    "%s is up to date with zero mod_time!", path);
         // This file is up to date
 
         // If we haven't already scanned for includes, do it now.
@@ -1849,7 +1863,12 @@ abstract class Binary : File {
                 // Remember what source extension this binary uses.
                 sourceExt = validateExtension(origin, ext, sourceExt);
 
-                string destName = stripExtension(sourceFile.name) ~ ".o";
+                version(Posix) {
+                    string destName = sourceFile.name.setExtension(".o");
+                }
+                version(Windows) {
+                    string destName = sourceFile.name.setExtension(".obj");
+                }
                 string destPath = prospectivePath("obj", sourceFile.parent, destName);
                 File obj = new File(origin, this, destName, Privacy.PUBLIC, destPath, false, true);
                 objs ~= obj;
@@ -2029,7 +2048,7 @@ final class StaticLib : Binary {
 
                 copy.action = new Action(origin, pkg,
                                          format("%-15s %s", "Export", source.path),
-                                         copyCmd ~ " ${INPUT} ${OUTPUT}",
+                                         "COPY ${INPUT} ${OUTPUT}",
                                          [copy], [source]);
             }
         }
@@ -2139,6 +2158,9 @@ final class DynamicLib : File {
         uniqueName = std.array.replace(buildPath(pkg.trail, name_), dirSeparator, "-");
         if (name_ == pkg.name) uniqueName = std.array.replace(pkg.trail, dirSeparator, "-");
         string _path = buildPath("dist", "lib", format("lib%s.so", uniqueName));
+        version(Windows) {
+            _path = _path.setExtension(".dll");
+        }
 
         super(origin, pkg, name_ ~ "-dynamic", Privacy.PUBLIC, _path, false, true);
 
@@ -2239,6 +2261,9 @@ final class Exe : Binary {
             case "test-exe": desc = "TestExe"; dest = buildPath("priv", pkg.trail, name_); break;
             default: assert(0, "invalid Exe kind " ~ kind);
         }
+        version(Windows) {
+            dest = dest.setExtension(".exe");
+        }
 
         super(origin, pkg, name_ ~ "-exe", dest, sourceNames, []);
 
@@ -2326,14 +2351,13 @@ void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) 
 
         GenerateCommand *generate = ext in generateCommands;
         if (generate is null) {
-            // Target is a simple copy of source file,
-            // set to executable if dest is bin.
+            // Target is a simple copy of source file, preserving execute permission.
             File destFile = new File(origin, pkg, relName ~ "-copy", Privacy.PUBLIC,
                                      buildPath(destDir, name), false, true);
             destFile.action = new Action(origin,
                                          pkg,
                                          format("%-15s %s", "Copy", destFile.path),
-                                         format("%s %s %s", copyCmd, sourceFile.path, destFile.path),
+                                         "COPY ${INPUT} ${OUTPUT}",
                                          [destFile],
                                          [sourceFile]);
         }
@@ -2648,7 +2672,24 @@ void doWork(bool                 printActions,
         if (command == "DUMMY") {
             // Just write some text into the target file
             std.file.write(targets, "dummy");
-            say("Sending result of dummy action %s", action);
+            PlannerProtocol.sendSuccess(plannerChannel, action);
+            return;
+        }
+
+        else if (command.length > 5 && command[0..5] == "COPY ") {
+            // Do the copy ourselves because Windows doesn't seem to have an
+            // external copy command, and this is faster anyway.
+            string[] splitCommand = split(command);
+            if (splitCommand.length != 3) {
+                fatal("Got invalid copy command '%s'", command);
+            }
+            string from = splitCommand[1];
+            string to   = splitCommand[2];
+            std.file.copy(from, to);
+            version(Posix) {
+                // Preserve executable permission
+                to.setExecutableIf(from);
+            }
             PlannerProtocol.sendSuccess(plannerChannel, action);
             return;
         }
@@ -2742,9 +2783,11 @@ void doWork(bool                 printActions,
             }
         }
     }
-    catch (ChannelFinalized ex) { /* Normal exit */ }
-    catch (BailException) { PlannerProtocol.sendBailed(plannerChannel); }
+    catch (ChannelFinalized ex) {}
+    catch (BailException ex) {}
     catch (Exception ex)  { say("Unexpected exception: %s", ex.msg); }
+
+    PlannerProtocol.sendBailed(plannerChannel);
 }
 
 
@@ -2828,7 +2871,14 @@ int main(string[] args) {
                     if (tokens[1][0] == '"') {
                         tokens[1] = tokens[1][1 .. $-1];
                     }
-                    environment[tokens[0]] = tokens[1];
+                    string name  = tokens[0];
+                    string value = tokens[1];
+
+                    version(Windows) {
+                        name = name[4..$]; // strip off "set "
+                    }
+
+                    environment[name] = value;
                 }
             }
         }

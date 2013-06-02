@@ -86,7 +86,7 @@ version(Windows) {
     string ENV_DELIM = ";";
     string ENV_PREFIX = "set ";
 
-    string CLEAN_TEXT = "rmdir /s dist priv obj tmp\n";
+    string CLEAN_TEXT = "rmdir /s /q dist priv obj tmp\n";
 }
 
 
@@ -227,7 +227,12 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
 
     // Create clean script.
-    update(buildPath(buildDir, "clean"), CLEAN_TEXT, true);
+    version(Posix) {
+        update(buildPath(buildDir, "clean"), CLEAN_TEXT, true);
+    }
+    version(Windows) {
+        update(buildPath(buildDir, "clean.bat"), CLEAN_TEXT, true);
+    }
 
 
     // Create environment file.
@@ -240,22 +245,24 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
         envText ~= "#!/bin/bash\n";
         envText ~= toEnv("LD_LIBRARY_PATH", vars, ["SYS_LIB"],  [lib] ~ fromEnv("LD_LIBRARY_PATH"));
         envText ~= toEnv("PATH",            vars, ["SYS_PATH"], [bin] ~ fromEnv("PATH"));
+        envText ~= "DIST_DATA_PATH=\"" ~ data ~ "\"\n";
     }
     version(Windows) {
         envText ~= toEnv("PATH", vars, ["SYS_LIB", "SYS_PATH"], [lib, bin] ~ fromEnv("PATH"));
+        envText ~= "set DIST_DATA_PATH=\"" ~ data ~ "\"\n";
     }
-    envText ~= "DIST_DATA_PATH=\"" ~ data ~ "\"\n";
     update(env, envText, false);
 
 
     // Create run script
     version(Posix) {
         string runText = "#!/bin/bash\nsource " ~ env ~ "\nexec \"$@\"\n";
+        update(buildPath(buildDir, "run"), runText, true);
     }
     version(Windows) {
-        string runText = "%1%";
+        string runText = envText ~ "\n%1%";
+        update(buildPath(buildDir, "run.bat"), runText, true);
     }
-    update(buildPath(buildDir, "run"), runText, true);
 
 
     //

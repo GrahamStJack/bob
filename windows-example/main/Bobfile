@@ -1,0 +1,4 @@
+refer util;
+
+# Copy sample1.data and sample1.data into dist/data
+misc sample.data : data;

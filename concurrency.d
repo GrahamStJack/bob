@@ -17,9 +17,6 @@ import core.stdc.config;
 import core.sync.mutex;
 import core.sync.condition;
 
-static import linux = std.c.linux.linux;
-
-
 // Provides a simple inter-thread message-passing implementation.
 // * Messages cannot contain references to mutable data.
 // * Message queues (Channels) are explicitly created and passed to threads as
@@ -42,7 +39,6 @@ static import linux = std.c.linux.linux;
 
 //---------------------------------------------------------------------------
 // A Channel for sending messages between threads.
-// An internal eventfd provides a file-descriptor to select on for removal.
 // Multiple threads may add and remove messages from the queue, but usually
 // one thread adds and one other thread removes.
 //---------------------------------------------------------------------------
@@ -55,8 +51,6 @@ public class ChannelFull: Exception {
     this() { super("Channel full"); }
 }
 
-extern (C) int eventfd(int initval, int flags);
-
 class Channel(T) if (!hasAliasing!T) {
     private {
         Mutex     _mutex;
@@ -67,7 +61,6 @@ class Channel(T) if (!hasAliasing!T) {
         size_t    _back;      // Next add position
         size_t    _front;     // next remove position
         bool      _finalized;
-        int       _fd;        // eventfd file descriptor
     }
 
     this(size_t capacity) {
@@ -77,13 +70,6 @@ class Channel(T) if (!hasAliasing!T) {
         _readCondition  = new Condition(_mutex);
         _writeCondition = new Condition(_mutex);
         _queue.length   = capacity;
-
-        _fd = eventfd(0, 0);
-        assert(_fd != -1, "Failed to open eventfd");
-    }
-
-    ~this() {
-        linux.close(_fd);
     }
 
     // Finalise the Channel, causing it to throw ChannelFinalised on remove() when empty.
@@ -91,8 +77,6 @@ class Channel(T) if (!hasAliasing!T) {
         synchronized(_mutex) {
             _finalized = true;
             if (!_count) {
-                ulong one = 1;
-                linux.write(_fd, &one, one.sizeof);
                 _readCondition.notifyAll();
             }
         }
@@ -105,8 +89,6 @@ class Channel(T) if (!hasAliasing!T) {
         }
         _queue[_back] = msg;
         if (!_count) {
-            ulong one = 1;
-            linux.write(_fd, &one, one.sizeof);
             _readCondition.notifyAll();
         }
         ++_count;
@@ -148,17 +130,8 @@ class Channel(T) if (!hasAliasing!T) {
             T msg = _queue[_front];
             --_count;
             _front = (_front + 1) % _queue.length;
-            if (!_count && !_finalized) {
-                ulong val = void;
-                linux.read(_fd, &val, val.sizeof);
-            }
             return msg;
         }
-    }
-
-    // Return the eventfd for use in a Selector.
-    protected final int readFd() {
-        return _fd;
     }
 }
 

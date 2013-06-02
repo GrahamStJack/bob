@@ -1,0 +1,4 @@
+refer base;
+
+dist-exe util1 : util1.cpp;
+dist-exe util3 : util3.cpp;
