@@ -17,8 +17,9 @@
  * along with Bob.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-// TODO:
-// * Port to windows.
+// TODO
+//
+// High priority wish-list:
 //
 // Lower priority wish-list:
 // * Conditional Bobfile statements.
@@ -2686,6 +2687,8 @@ void doWork(bool                 printActions,
             string from = splitCommand[1];
             string to   = splitCommand[2];
             std.file.copy(from, to);
+            auto now = Clock.currTime();
+            to.setTimes(now, now);
             version(Posix) {
                 // Preserve executable permission
                 to.setExecutableIf(from);
