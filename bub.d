@@ -1,20 +1,20 @@
 /**
  * Copyright 2012-2013, Graham St Jack.
  *
- * This file is part of bob, a software build tool.
+ * This file is part of bub, a software build tool.
  *
- * Bob is free software: you can redistribute it and/or modify
+ * Bub is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Bob is distributed in the hope that it will be useful,
+ * Bub is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
  * You should have received a copy of the GNU General Public License
- * along with Bob.  If not, see <http://www.gnu.org/licenses/>.
+ * along with Bub.  If not, see <http://www.gnu.org/licenses/>.
  */
 
 // TODO
@@ -22,7 +22,7 @@
 // High priority wish-list:
 //
 // Lower priority wish-list:
-// * Conditional Bobfile statements.
+// * Conditional Bubfile statements.
 // * Add a mechanism to scrape the names of additional output filenames from
 //   a source file using (say) a regex.
 // * Generation of documentation from the code.
@@ -34,7 +34,7 @@
 A build tool suitable for C/C++ and D code, written in D.
 
 Objectives of this build tool are:
-* Easy to write and maintain build scripts (Bobfiles):
+* Easy to write and maintain build scripts (Bubfiles):
   - Simple syntax.
   - Automatic determination of which in-project libraries to link.
 * Auto execution and evaluation of unit tests.
@@ -45,7 +45,7 @@ Objectives of this build tool are:
   - A source file isn't scanned for imports/includes until after it is up to date.
   - Dependencies inferred from these imports are automatically applied.
 
-Refer to README and INSTRUCTIONS and examples for details on how to use bob.
+Refer to README and INSTRUCTIONS and examples for details on how to use bub.
 
 
 Relationships Between Files
@@ -53,7 +53,7 @@ Relationships Between Files
 
 Files are arranged in a tree that represents containment, with additional
 references between them implied by includes/imports in the code and explicit
-refer statements in the Bobfiles. These references are used to manage dependencies.
+refer statements in the Bubfiles. These references are used to manage dependencies.
 
 An Action that builds Files depends on other Files. The Action cannot be issued
 until all the its dependencies are satisfied, and will be issued if any of its
@@ -96,23 +96,23 @@ the top-level package names, which must be unique.
 
 This namespacing avoids problems of duplicate filenames
 at the cost of the compiler being able to find everything, even files
-that should not be accessible. Bob therefore enforces all visibility
+that should not be accessible. Bub therefore enforces all visibility
 rules before invoking the compiler.
 
 
 The build process
 -----------------
 
-Bob reads the project Bobfile, transiting into
-other-package Bobfiles as packages are mentioned.
+Bub reads the project Bubfile, transiting into
+other-package Bubfiles as packages are mentioned.
 
-Bob assumes that new packages, libraries, etc are mentioned in dependency order.
+Bub assumes that new packages, libraries, etc are mentioned in dependency order.
 That is, when each thing is mentioned, everything it depends on, including
 dependencies inferred by include/import statements in source code, has already
-been mentioned. Exception: a Bobfile can refer to previously-unknown top-level
+been mentioned. Exception: a Bubfile can refer to previously-unknown top-level
 packages.
 
-The planner thread scans the Bobfiles, binding files to specific
+The planner thread scans the Bubfiles, binding files to specific
 locations in the filesystem as it goes, and builds the dependency graph.
 
 The file state sequence is:
@@ -553,7 +553,7 @@ bool startsWith(string str, string[] prefixes) {
 //------------------------------------------------------------------------
 
 //
-// Options read from Boboptions file
+// Options read from Buboptions file
 //
 
 // General variables
@@ -591,10 +591,10 @@ static this() {
 // value can contain '='
 //
 void readOptions() {
-    string path = "Boboptions";
+    string path = "Buboptions";
     Origin origin = Origin(path, 1);
 
-    errorUnless(exists(path) && isFile(path), origin, "can't read Boboptions %s", path);
+    errorUnless(exists(path) && isFile(path), origin, "can't read Buboptions %s", path);
 
     string content = readText(path);
     foreach (line; splitLines(content)) {
@@ -655,7 +655,7 @@ void readOptions() {
             }
         }
         else {
-            fatal("Invalid Boboptions line: %s", line);
+            fatal("Invalid Buboptions line: %s", line);
         }
     }
 }
@@ -890,10 +890,10 @@ SysLib[] knownSystemHeader(string header, SysLib[][string] libs) {
 
 
 //
-// read a Bobfile, returning all its statements
+// read a Bubfile, returning all its statements
 //
 // //  a simple statement
-// rulename targets... : arg1... : arg2... : arg3...; // can expand Boboptions variable with ${var-name}
+// rulename targets... : arg1... : arg2... : arg3...; // can expand Buboptions variable with ${var-name}
 //
 
 struct Statement {
@@ -916,10 +916,10 @@ struct Statement {
     }
 }
 
-Statement[] readBobfile(string path) {
+Statement[] readBubfile(string path) {
     Statement[] statements;
     Origin origin = Origin(path, 1);
-    errorUnless(exists(path) && isFile(path), origin, "can't read Bobfile %s", path);
+    errorUnless(exists(path) && isFile(path), origin, "can't read Bubfile %s", path);
 
     string content = readText(path);
 
@@ -1003,7 +1003,7 @@ Statement[] readBobfile(string path) {
 //-------------------------------------------------------------------------
 // Planner
 //
-// Planner reads Bobfiles, understands what they mean, builds
+// Planner reads Bubfiles, understands what they mean, builds
 // a tree of packages, etc, understands what it all means, enforces rules,
 // binds everything to filenames, discovers modification times, scans for
 // includes, and schedules actions for processing by the worker.
@@ -1050,8 +1050,8 @@ final class Action {
         errorUnless(!(name in byName), origin, "Duplicate command name=%s", name);
         byName[name] = this;
 
-        // All the files built by this action depend on the Bobfile
-        depends ~= pkg.bobfile;
+        // All the files built by this action depend on the Bubfile
+        depends ~= pkg.bubfile;
 
         // Recognise in-project tools in the command.
         foreach (token; split(command)) {
@@ -1163,7 +1163,7 @@ final class Action {
                         values = split(resolve(options[varname]));
                     }
                     else {
-                        // Not in Boboptions, so it evaluated to empty.
+                        // Not in Buboptions, so it evaluated to empty.
                         values = [];
                     }
 
@@ -1432,17 +1432,17 @@ class Node {
 
 
 //
-// Pkg - a package (directory containing a Bobfile).
-// Has a Bobfile, assorted source and built files, and sub-packages
-// Used to group files together for dependency control, and to house a Bobfile.
+// Pkg - a package (directory containing a Bubfile).
+// Has a Bubfile, assorted source and built files, and sub-packages
+// Used to group files together for dependency control, and to house a Bubfile.
 //
 final class Pkg : Node {
 
-    File bobfile;
+    File bubfile;
 
     this(Origin origin, Node parent_, string name_, Privacy privacy_) {
         super(origin, parent_, name_, privacy_);
-        bobfile = File.addSource(origin, this, "Bobfile", Privacy.PRIVATE, false);
+        bubfile = File.addSource(origin, this, "Bubfile", Privacy.PRIVATE, false);
     }
 }
 
@@ -2389,16 +2389,16 @@ void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) 
 
 
 //
-// Process a Bobfile
+// Process a Bubfile
 //
-void processBobfile(string indent, Pkg pkg) {
+void processBubfile(string indent, Pkg pkg) {
     static bool[Pkg] processed;
     if (pkg in processed) return;
     processed[pkg] = true;
 
-    if (g_print_rules) say("%sprocessing %s", indent, pkg.bobfile);
+    if (g_print_rules) say("%sprocessing %s", indent, pkg.bubfile);
     indent ~= "  ";
-    foreach (statement; readBobfile(pkg.bobfile.path)) {
+    foreach (statement; readBubfile(pkg.bubfile.path)) {
         if (g_print_rules) say("%s%s", indent, statement.toString());
         switch (statement.rule) {
 
@@ -2408,7 +2408,7 @@ void processBobfile(string indent, Pkg pkg) {
                                 "Contained packages have to be relative");
                     Privacy privacy = privacyOf(statement.origin, statement.arg1);
                     Pkg newPkg = new Pkg(statement.origin, pkg, name, privacy);
-                    processBobfile(indent, newPkg);
+                    processBubfile(indent, newPkg);
                 }
             break;
 
@@ -2425,7 +2425,7 @@ void processBobfile(string indent, Pkg pkg) {
                                              Node.byTrail["root"],
                                              trail,
                                              Privacy.PUBLIC);
-                        processBobfile(indent, newPkg);
+                        processBubfile(indent, newPkg);
                         pkg.addReference(statement.origin, newPkg);
                     }
                     else {
@@ -2568,10 +2568,10 @@ bool doPlanning(uint                 numWorkers,
 
     int needed;
     try {
-        // read the project Bobfile and descend into all those it refers to
+        // read the project Bubfile and descend into all those it refers to
         auto root = new Node();
         auto project = new Pkg(Origin(), root, projectPackage, Privacy.PRIVATE);
-        processBobfile("", project);
+        processBubfile("", project);
 
         // clean out unwanted files from the build dir
         cleandirs();
@@ -2849,14 +2849,14 @@ int main(string[] args) {
             numJobs = 20;
         }
         if (returnValue != 0 || help) {
-            say("Usage:  bob [options]\n"
+            say("Usage:  bub [options]\n"
                 "  --statements     print statements\n"
                 "  --deps           print dependencies\n"
                 "  --actions        print actions\n"
                 "  --details        print heaps of details\n"
                 "  --jobs=VALUE     maximum number of simultaneous actions\n"
                 "  --help           show this message\n"
-                "target is everything contained in the project Bobfile and anything referred to.");
+                "target is everything contained in the project Bubfile and anything referred to.");
             return returnValue;
         }
 

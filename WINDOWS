@@ -1,12 +1,12 @@
-Bob was developed under Linux, and the Windows port is a work in progress.
+Bub was developed under Linux, and the Windows port is a work in progress.
 
 Known issues:
 
 Only tested with the dmd compiler and the g++ compiler packaged with Dev-Cpp.
 
-bob-config uses symbolic links in the src subdirectory to point to the
+bub-config uses symbolic links in the src subdirectory to point to the
 actual locations of the top-level packages. This means that when running
-bob-config, you have to have Vista or better, and be running a shell or batch
+bub-config, you have to have Vista or better, and be running a shell or batch
 file as administrator. You can do this by right-clicking on the command-prompt
 or batch file icons. Unfortunately when doing so, you can't see any network
 drives (such as a virtual machine shared folder), so you may need to locate

@@ -1,7 +1,7 @@
 This is a simple example project "repo" intended to demonstrate how to
-use bob-config and bob to build a project.
+use bub-config and bub to build a project.
 
-Bob's main utility is in facilitating the organising, building and testing
+Bub's main utility is in facilitating the organising, building and testing
 of large projects, particularly those involving in-place reuse of code in
 multiple repos, so this small example can't do it justice. It does however
 provide an easy example of how to get started.

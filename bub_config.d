@@ -1,14 +1,14 @@
 /*
  * Copyright 2012-2013, Graham St Jack.
  *
- * This file is part of bob, a software build tool.
+ * This file is part of bub, a software build tool.
  *
- * Bob is free software: you can redistribute it and/or modify
+ * Bub is free software: you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
  * the Free Software Foundation, either version 3 of the License, or
  * (at your option) any later version.
  *
- * Bob is distributed in the hope that it will be useful,
+ * Bub is distributed in the hope that it will be useful,
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
@@ -18,14 +18,14 @@
  */
 
 //
-// The bob-config utility. Sets up a build directory from which
-// a project can be built from source by the 'bob' build utility.
+// The bub-config utility. Sets up a build directory from which
+// a project can be built from source by the 'bub' build utility.
 // The built files are all located in the build directory, away from the
 // source. Multiple source repositories are supported.
 //
-// Refer to the example bob.cfg file for details of bob configuration.
+// Refer to the example bub.cfg file for details of bub configuration.
 //
-// Note that bob-config does not check for or locate external dependencies.
+// Note that bub-config does not check for or locate external dependencies.
 // You have to use other tools to check out your source and make sure that
 // all the external dependencies of your project are satisfied.
 // Often this means a 'prepare' script that unpacks a number of packages
@@ -146,7 +146,7 @@ private void append(ref Vars vars, string name, string[] extra, AppendType appen
 
 
 //
-// Return a string to set an environment variable from one or more bob variables.
+// Return a string to set an environment variable from one or more bub variables.
 //
 string toEnv(string envName, const ref Vars vars, string[] varNames, string[] extras) {
     string result;
@@ -211,19 +211,19 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     }
 
 
-    // Create Boboptions file from vars.
-    string bobText;
+    // Create Buboptions file from vars.
+    string bubText;
     foreach (string var; vars.keys().sort) {
         const string[] tokens = vars[var];
         if (tokens.length) {
-            bobText ~= var ~ " =";
+            bubText ~= var ~ " =";
             foreach (token; tokens) {
-                bobText ~= " " ~ token;
+                bubText ~= " " ~ token;
             }
-            bobText ~= '\n';
+            bubText ~= '\n';
         }
     }
-    update(buildPath(buildDir, "Boboptions"), bobText, false);
+    update(buildPath(buildDir, "Buboptions"), bubText, false);
 
 
     // Create clean script.
@@ -278,7 +278,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     mkdir(localSrcPath);
 
     // Make a symbolic link to each top-level package in this and other specified repos.
-    // Note - a package is a dir in a refer statement in a top-level Bobfile, starting
+    // Note - a package is a dir in a refer statement in a top-level Bubfile, starting
     // from the project package.
 
     assert("PROJECT" in vars && vars["PROJECT"].length, "PROJECT variable is not set");
@@ -292,18 +292,18 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
     string[string] pkgPaths;
 
-    // Local function to get and check references from a dir's Bobfile
+    // Local function to get and check references from a dir's Bubfile
     void getReferences(string path) {
         if (!exists(path) || !isDir(path)) {
             writefln("No directory at %s", path);
             exit(1);
         }
-        string bobfile = buildPath(path, "Bobfile");
-        if (!exists(bobfile)) {
-            writefln("Cannot find Bobfile in %s", path);
+        string bubfile = buildPath(path, "Bubfile");
+        if (!exists(bubfile)) {
+            writefln("Cannot find Bubfile in %s", path);
             exit(1);
         }
-        string[] lines = splitLines(readText(bobfile));
+        string[] lines = splitLines(readText(bubfile));
         bool inRefer;
         foreach(line; lines) {
             string[] tokens = split(line);
@@ -337,7 +337,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
                             }
                             if (pkgPath is null) {
                                 writefln("Could not find package %s referenced from %s",
-                                         pkgName, bobfile);
+                                         pkgName, bubfile);
                                 exit(1);
                             }
                             else {
@@ -462,7 +462,7 @@ int main(string[] args) {
 
     bool     help;
     string   mode;
-    string   configFile = "bob.cfg";
+    string   configFile = "bub.cfg";
 
     try {
         getopt(args,
@@ -480,7 +480,7 @@ int main(string[] args) {
         writefln("Usage: %s [options] build-dir-path\n"
                  "  --help                Display this message.\n"
                  "  --mode=mode-name      Build mode.\n"
-                 "  --config=config-file  Specifies the config file. Default bob.cfg.\n",
+                 "  --config=config-file  Specifies the config file. Default bub.cfg.\n",
                  args[0]);
         exit(1);
     }

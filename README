@@ -1,9 +1,9 @@
-Bob is a build tool written in D which supports building of large C/C++/D
+Bub is a build tool written in D which supports building of large C/C++/D
 projects.
 
-Bob is written and maintained by Graham St Jack (Graham.StJack@internode.on.net).
+Bub is written and maintained by Graham St Jack (Graham.StJack@internode.on.net).
 
-Some of bob's features that are useful on large projects are:
+Some of bub's features that are useful on large projects are:
 
 * Built files are located outside the source directory.
 
@@ -19,4 +19,5 @@ Some of bob's features that are useful on large projects are:
 * Generated files are not scanned for imports/includes until after they are up to date.
 
 
-Bob is currently only available for Linux.
+Bub is currently primarily developed and tested on Linux, but has also been tested on Windows.
+It should work on OS-X.

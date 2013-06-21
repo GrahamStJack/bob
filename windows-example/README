@@ -1,5 +1,5 @@
 This directory contains a copy of the posix example, cut down to avoid
 issues like scripts and rst2html, so it will work on Windows.
 
-It is provided to facilitate testing bob on Windows. The example directory
+It is provided to facilitate testing bub on Windows. The example directory
 is the appropriate place to look for an example.

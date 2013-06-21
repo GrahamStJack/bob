@@ -1,20 +1,90 @@
 Identification
 ==============
 
-Bob is a build tool intended primarily to facilitate the development of
-large C/C++/D projects by:
+Bottom-up-build (bub) is a build tool intended primarily to facilitate the
+development of large C/C++/D projects by:
 * Being easy to use.
 * Enforcing rules like dependency management.
+* Executing tests within the build.
 * Supporting code generation.
 
-This file provides an introduction into how to use bob. Refer to the example
-directory for more digestible help.
+Some relatively minor but useful additional features are:
+* Building outside the source tree.
+* Support for using source form multiple repositories.
+* Auto-deleting redundant files from the build directory.
+  This one is surprisingly useful, because you can't get false success
+  from a file left over from an earlier version.
+
+This file provides an introduction into how to use bub. Refer to the example
+directory for a simple worked example.
+
+
+History
+=======
+
+Bub was initially developed to help tame the complexity in a large C++
+project.
+
+The complexity of the build system itself is taken care of by
+having bub provide the facilities that you actually need, rather than low
+level building blocks. Maintaining the configuration of a bub build system
+is very easy and simple.
+
+Bub mitigates the complexity of your project by forcing you to pay
+attention to dependencies, which has the effect of breaking your design up
+into well-defined packages, with dependencies flowing in one direction only.
+
+Benefits of this include:
+* The lowest-level code can be implemented and tested independently of
+  the code that uses it. This opens the door to cost-effective code reuse.
+* Later on, a breakage in the code you are working on is detected very early
+  in the build because test code is built and run early, as it doesn't need
+  to depend on high-level code.
+* Well-factored designs with well-defined non-circular dependencies are way
+  easier to understand and maintain than code with dependencies running wild.
+
+As the original C++ project grew, more challenges emperged.
+
+The first was the need to generate source code from things like IDL files.
+This is trickier than it appears, because the normal practice of scanning
+source files for includes at the start of the build doesn't work for generated
+code, which might not even exist at that time. Bub supports code generation,
+and importantly defers scanning a source file for includes until AFTER it is
+up to date.
+
+The second problem was that manually keeping track of which libraries to link
+with rapidly becomes untenable as the project grows. The usual approach of
+having a very small number of libraries and deferring linking of executables
+till near the end of the build wasn't acceptable because it defeats bub's
+central purpose by having executables that depend on everything. Bub deals
+with this ias follows:
+* When specifying libraries, the public and private header files of that
+  library are declared.
+* Including a public header from a library establishes a dependency on that
+  library.
+* System libraries are also specified, allowing dependencies on them to
+  be determined via includes too.
+This approach results in a massive simplification in maintenance of a
+project's build system, and also provides bub with the information it needs
+to enforce dependency rules without relying on the compiler to do it via
+-I directives. Dependency violations are thus detected very early, and result
+in clear error messages.
+
+The next challenge was that a large C/C++ project wears you down after a while,
+and you really want to use a modern, high-productivity language (like D).
+Bub was extended to support the D language. The main consequence of this
+for C/C++ code is that the headers and bodies comprising a package all have
+to be in the same directory. Because by this time bub enforced dependency
+rules directly, there is no longer any benefit in putting public headers in
+a separate directory, so this doesn't present a problem.
+Bub's support for D faclitates the gradual insinuation of D into the code base,
+starting with scripts, utilities and tests, and later with production code.
 
 
 Preparation
 ===========
 
-Bob assumes that all the source code and external libraries/utilities you will
+Bub assumes that all the source code and external libraries/utilities you will
 need are already present. It is up to you to make this happen.
 
 Typically you will have:
@@ -27,9 +97,9 @@ Typically you will have:
 Configuration
 =============
 
-The bob-config utility establishes a build directory, from which bob can build
-your project. bob-config requires a configuration file that defines a number of
-variables - see example/bob.cfg for a fully documented example.
+The bub-config utility establishes a build directory, from which bub can build
+your project. bub-config requires a configuration file that defines a number of
+variables - see example/bub.cfg for a fully documented example.
 
 The configured variables ultimately specify:
 
@@ -53,23 +123,23 @@ repo-root
   assorted-uninteresting-files
   assorted-uninteresting-dirs
   source-root
-    bob.cfg
+    bub.cfg
     assorted-source-dirs
 
 One of the source-dirs is specified in the PROJECT variable as containing
-the top level Bobfile.
+the top level Bubfile.
 
 To configure a build directory from a repo that looks like the above:
 
 cd repo-root/source-root
-bob-config --mode=debug ~/builds/myproject/debug
+bub-config --mode=debug ~/builds/myproject/debug
 
 
 The build directory contains:
 
 environment - Sourced to set up environment variables.
 run         - Script to run a project executable.
-Boboptions  - Contains variables from config file.
+Buboptions  - Contains variables from config file.
 src
   symlinks-to-source-dirs
 obj
@@ -90,25 +160,25 @@ dist
 Building
 ========
 
-Bob is the build tool. It always builds the whole project, so there is no build
+Bub is the build tool. It always builds the whole project, so there is no build
 target to specify on the command-line. This isn't a problem because:
-* Bob determines what needs to be done quickly.
-* Bob's log output is very clean.
-* Bob builds files (mostly) in definition order, and stops the build when an error
+* Bub determines what needs to be done quickly.
+* Bub's log output is very clean.
+* Bub builds files (mostly) in definition order, and stops the build when an error
   occurs, so you quickly get back to the point of failure during development.
-* Bob runs and evaluates unit tests (mostly) in definition order, so if you have
+* Bub runs and evaluates unit tests (mostly) in definition order, so if you have
   unit tests, you quickly get to the point of failure during debugging.
 
 The "mostly" above refers to the jitter in build order that occurs when building
 with multiple cores.
 
-The build process is controlled by Bobfiles. The top-level source directory
-(specified in the config file) contains the top-level Bobfile, and it brings in
+The build process is controlled by Bubfiles. The top-level source directory
+(specified in the config file) contains the top-level Bubfile, and it brings in
 other directories with its statements.
 
-Refer to the example's Bobfiles.
+Refer to the example's Bubfiles.
 
-Bobfile syntax is:
+Bubfile syntax is:
 
 # This line is a comment.
 <statement-type> <param0> [: <param1> [: param2 [: param3]]];
@@ -119,16 +189,16 @@ Statements often refer to files and directories.
 The rules for determining the paths referred to are:
 
 * Source files are either src/trail/name or obj/trail/name, where
-  trail in the sequence of directory names leading to the Bobfile,
-  and name is the name specified in the Bobfile statement.
+  trail in the sequence of directory names leading to the Bubfile,
+  and name is the name specified in the Bubfile statement.
 
-  Example: if a Bobfile in tools/hammer has a library that contains source
+  Example: if a Bubfile in tools/hammer has a library that contains source
   file claw.h, it is looked for in src/tools/hammer/claw.h and
   obj/tools/hammer/claw.h. It is an error for the file to be in both
   locations.
 
 * Directories can be "beneath" the current directory. For example, if a
-  Bobfile in tools has a "contain claw;" statement, the trail of the contained
+  Bubfile in tools has a "contain claw;" statement, the trail of the contained
   directory is tools/hammer.
 
 * Directories can also be specified from the root. For example,
@@ -145,9 +215,9 @@ contain subdir-names [: protected];
 
 eg: contain math net stream tools;
 
-Specifies that the listed subdirectories contain Bobfiles and are included in
+Specifies that the listed subdirectories contain Bubfiles and are included in
 the build. Visibility defaults to public. Contained directories must be
-specified in dependency order.
+specified in dependency order (lowest level first).
 
 
 Refer
@@ -166,7 +236,7 @@ Static Lib
 static-lib lib-name : public-source [: protected-source];
 public-lib lib-name : public-source [: protected-source];
 
-eg: static-lib math : matrix.h alg.h : matrix.cc alg.cc;
+eg: static-lib math : matrix.h alg.h : matrix.cpp alg.cpp;
 
 Specifies a static library. All the source files should be in the same language,
 or in a language from which the library's language files can be generated.
@@ -195,8 +265,8 @@ Dynamic libs contain all the object files contained in the specified static libs
 Executables defined after a dynamic library will link to the dynamic library
 rather than the static library.
 
-The contained static-libs all have to be declared in the current Bobfile
-or in a transitively contained directory's Bobfile.
+The contained static-libs all have to be declared in the current Bubfile
+or in a transitively contained directory's Bubfile.
 The last path element can optionally be omitted if it is the same as the
 containing directory name, which is usually the case.
 
@@ -204,7 +274,7 @@ For example, if the directory structure is:
   one - defines dynamic library "one"
     two - defines static library "two"
     three - defines static library "three"
-then the statement in one's Bobfile to generate the dynamic library is:
+then the statement in one's Bubfile to generate the dynamic library is:
 
 dynamic-lib one : two three;
 
@@ -225,13 +295,14 @@ eg: test-exe math-test : math_test.cpp;
 
 dist-exe places the built executable in the dist/bin directory.
 
-util-exe places the build executable in the priv/<trail> directory.
+priv-exe places the build executable in the priv/<trail> directory.
 
 test-exe places the built executable in the priv/<trail> directory,
 and executes the test when its result file is out of date.
 
-The test is run with the TEST_PATH environment variable set to a path
-that the test can use for scratch file I/O if necessary.
+The test is run with a command-line argument --tmp=<path>, where
+<path> is a temporary directory that the test can use for scratch files
+if necessary.
 
 
 Scripts, data and docs
@@ -259,12 +330,12 @@ Dependencies
 Discussion
 ----------
 
-Dependencies are a major preoccupation of bob. This is because on large
+Dependencies are a major preoccupation of bub. This is because on large
 projects, management of dependencies is essential, and the best way to manage
 something is with a tool. If you can't build software without explicitly
 declaring a dependency, you can't sneak a dependency in while no-one is looking.
 
-Bob also goes further and insists on no circularities between files or directories.
+Bub also goes further and insists on no circularities between files or directories.
 This may seem like a harsh constraint, but it is a very useful design tool, and
 in the experience of the writer, leads to better, more maintainable designs.
 
@@ -273,18 +344,20 @@ Rules
 -----
 
 Files and their owning directories are arranged in a tree with cross-linked
-dependencies. Each node in the tree can be public or protected. The root of the
+references. Each node in the tree can be public or protected. The root of the
 tree contains its children publicly.
 
-The dependency rules are:
+The reference rules are:
+
+* A node implicitly refers to its children.
 
 * A protected node can only be referred to by sibling nodes or nodes transitively
   contained by those siblings.
 
 * Node (A) can only refer to another node (B) if A's parent transitively refers
-  to or transitively contains node B.
+  to node B.
 
-* Circular dependencies are not allowed.
+* Circular references are not allowed.
 
 An object file can only be used once - either in a library or an executable.
 Dynamic libraries don't count as a use - they are just a repackaging.
@@ -292,4 +365,6 @@ Dynamic libraries don't count as a use - they are just a repackaging.
 A dynamic library cannot contain the same static library as another dynamic library.
 
 All static libraries referred to by the static libraries in a dynamic library
-must themselves be packaged in dyamic libraries.
+must also be packaged in dyamic libraries.
+
+All static libraries referred to by public static libraries must also be public.

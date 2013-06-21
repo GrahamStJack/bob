@@ -1,3 +1,3 @@
 #!/bin/bash
-dmd -g -property -w -wi bob_config.d -O -ofbob-config
-dmd -g -property -w -wi bob.d concurrency.d -O -ofbob
+dmd -g -property -w -wi bub_config.d -O -ofbub-config
+dmd -g -property -w -wi bub.d concurrency.d -O -ofbub
