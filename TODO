@@ -1,0 +1,24 @@
+High priority wish-list
+-----------------------
+
+* Finish Windows port.
+
+
+Lower priority wish-list
+------------------------
+
+* Conditional Bubfile statements.
+
+* Add a mechanism to scrape the names of additional output filenames from
+  a source file using (say) a regex. Intention is to allow things like
+  plantuml diagram text to be embedded inside an rst file.
+
+* Generation of documentation from the code.
+
+* Support code coverage analysis for test-exe.
+
+* Improve correctness of scanning for imports and includes.
+
+* Improve parsing of config files to allow more flexible build commands.
+
+* Extend bub-config's scope to assist with satisfying external dependencies.

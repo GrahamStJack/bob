@@ -4,10 +4,13 @@ Known issues:
 
 Only tested with the dmd compiler and the g++ compiler packaged with Dev-Cpp.
 
-bub-config uses symbolic links in the src subdirectory to point to the
+bub-config creates symbolic links in the src subdirectory to point to the
 actual locations of the top-level packages. This means that when running
 bub-config, you have to have Vista or better, and be running a shell or batch
 file as administrator. You can do this by right-clicking on the command-prompt
 or batch file icons. Unfortunately when doing so, you can't see any network
 drives (such as a virtual machine shared folder), so you may need to locate
 your source onto a local windows drive.
+
+Issues of backslashes in paths and finding dll files are still being worked
+through.

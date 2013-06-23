@@ -17,18 +17,6 @@
  * along with Bub.  If not, see <http://www.gnu.org/licenses/>.
  */
 
-// TODO
-//
-// High priority wish-list:
-//
-// Lower priority wish-list:
-// * Conditional Bubfile statements.
-// * Add a mechanism to scrape the names of additional output filenames from
-//   a source file using (say) a regex.
-// * Generation of documentation from the code.
-// * Support code coverage analysis for test-exe.
-// * Improve correctness of scanning for imports and includes.
-
 /*
 
 A build tool suitable for C/C++ and D code, written in D.
