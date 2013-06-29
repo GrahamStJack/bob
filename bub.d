@@ -2793,6 +2793,11 @@ void doWork(bool                 printActions,
 //--------------------------------------------------------------------------------------
 
 int main(string[] args) {
+    int  returnValue    = 0;
+    auto plannerChannel = new PlannerProtocol.Chan(100);
+    auto workerChannel  = new WorkerProtocol.Chan(100);
+    // bailerChannel is used by mySignalHandler, so we create that statically.
+
     try {
         bool printStatements = false;
         bool printDeps       = false;
@@ -2801,7 +2806,6 @@ int main(string[] args) {
         bool help            = false;
         uint numJobs         = 1;
 
-        int returnValue = 0;
         try {
             getopt(args,
                    std.getopt.config.caseSensitive,
@@ -2874,10 +2878,6 @@ int main(string[] args) {
             }
         }
 
-        auto plannerChannel = new PlannerProtocol.Chan(100);
-        auto workerChannel  = new WorkerProtocol.Chan(100);
-        // bailerChannel is used by mySignalHandler, so we create that statically.
-
         // Spawn the bailer and workers
         spawn(&doBailer);
         foreach (uint i; 0 .. numJobs) {
@@ -2891,15 +2891,15 @@ int main(string[] args) {
                                  printDetails,
                                  plannerChannel,
                                  workerChannel) ? 0 : 1;
-
-        // Shut down the bailer and all the workers.
-        bailerChannel.finalize();
-        workerChannel.finalize();
-
-        return returnValue;
     }
     catch (Exception ex) {
         say("Got unexpected exception: %s", ex.msg);
-        return 1;
+        returnValue = 1;
     }
+
+    // Shut down the bailer and all the workers.
+    bailerChannel.finalize();
+    workerChannel.finalize();
+
+    return returnValue;
 }
