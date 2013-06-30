@@ -19,5 +19,11 @@ Some of bub's features that are useful on large projects are:
 * Generated files are not scanned for imports/includes until after they are up to date.
 
 
-Bub is currently primarily developed and tested on Linux, but has also been tested on Windows.
-It should work on OS-X.
+Bub is currently primarily developed and tested on Linux, but has also been partly
+tested on Windows.  It should work on OS-X.
+
+
+To build on Linux, run 'make' in this directory.
+
+To build on Windows, run build_with_dmd.bat in this directory. Note that the
+Windows port is incomplete.

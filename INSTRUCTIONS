@@ -19,6 +19,31 @@ This file provides an introduction into how to use bub. Refer to the example
 directory for a simple worked example.
 
 
+Quick Start
+===========
+
+Build bub initially with make from this directory, and put bub and bub-config
+on your path.
+
+Set up build directories for the two examples:
+
+bub-config --mode=release ~/builds/bub
+cd example
+bub-config --mode=debug ~/builds/bub-example
+
+build with:
+
+cd ~/builds/example
+bub
+
+
+The example directory contains a simple example that shows off some of
+bub's features.
+
+Bub itself serves as a trivial example, doing just the basics. It may be
+a better starting point if you have a very small project.
+
+
 History
 =======
 

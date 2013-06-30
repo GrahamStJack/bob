@@ -2,33 +2,40 @@
 
 DFLAGS = -g -property -w -wi -O
 
-all : bub bub-config
+all : bin/bub bin/bub-config bin/concurrency-test
 
 
-concurrency.o : concurrency.d
-	dmd ${DFLAGS} -c concurrency.d -ofconcurrency.o
+obj/concurrency.o : bub/concurrency.d
+	dmd ${DFLAGS} -c bub/concurrency.d -ofobj/concurrency.o
 
-support.o : support.d concurrency.d
-	dmd ${DFLAGS} -c support.d -ofsupport.o
+obj/concurrency_test.o : bub/concurrency_test.d bub/concurrency.d
+	dmd ${DFLAGS} -c bub/concurrency_test.d -ofobj/concurrency_test.o
 
-parser.o : parser.d support.d
-	dmd ${DFLAGS} -c parser.d -ofparser.o
-
-planner.o : planner.d support.d concurrency.d
-	dmd ${DFLAGS} -c planner.d -ofplanner.o
-
-worker.o : worker.d support.d concurrency.d
-	dmd ${DFLAGS} -c worker.d -ofworker.o
-
-bub.o : bub.d planner.d worker.d parser.d support.d concurrency.d
-	dmd ${DFLAGS} -c bub.d -ofbub.o
-
-bub : bub.o planner.o worker.o parser.o support.o concurrency.o
-	dmd ${DFLAGS} bub.o planner.o worker.o parser.o support.o concurrency.o -ofbub
+bin/concurrency-test : obj/concurrency_test.o obj/concurrency.o
+	dmd ${DFLAGS} obj/concurrency_test.o obj/concurrency.o -ofbin/concurrency-test
 
 
-bub_config.o : bub_config.d
-	dmd ${DFLAGS} -c bub_config.d -ofbub_config.o
+obj/support.o : bub/support.d bub/concurrency.d
+	dmd ${DFLAGS} -c bub/support.d -ofobj/support.o
 
-bub-config : bub_config.o
-	dmd ${DFLAGS} bub_config.o -ofbub-config
+obj/parser.o : bub/parser.d bub/support.d
+	dmd ${DFLAGS} -c bub/parser.d -ofobj/parser.o
+
+obj/planner.o : bub/planner.d bub/support.d bub/concurrency.d
+	dmd ${DFLAGS} -c bub/planner.d -ofobj/planner.o
+
+obj/worker.o : bub/worker.d bub/support.d bub/concurrency.d
+	dmd ${DFLAGS} -c bub/worker.d -ofobj/worker.o
+
+obj/bub_main.o : bub/bub_main.d bub/planner.d bub/worker.d bub/parser.d bub/support.d bub/concurrency.d
+	dmd ${DFLAGS} -c bub/bub_main.d -ofobj/bub_main.o
+
+bin/bub : obj/bub_main.o obj/planner.o obj/worker.o obj/parser.o obj/support.o obj/concurrency.o
+	dmd ${DFLAGS} obj/bub_main.o obj/planner.o obj/worker.o obj/parser.o obj/support.o obj/concurrency.o -ofbin/bub
+
+
+obj/bub_config.o : bub/bub_config.d
+	dmd ${DFLAGS} -c bub/bub_config.d -ofobj/bub_config.o
+
+bin/bub-config : obj/bub_config.o
+	dmd ${DFLAGS} obj/bub_config.o -ofbin/bub-config

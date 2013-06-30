@@ -21,9 +21,9 @@
 This module provides assorted low-level support code for bub.
 */
 
-module support;
+module bub.support;
 
-import concurrency;
+import bub.concurrency;
 
 import std.algorithm;
 import std.array;

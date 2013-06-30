@@ -56,7 +56,7 @@ on File B.
 Reference Rules
 ---------------
 
-Each Node in the tree can be public or protected. The Node of the tree contains
+Each Node in the tree can be public or protected. The root of the tree contains
 its children publicly.
 
 The reference rules are:
@@ -122,10 +122,10 @@ after they are up to date, and the dependency graph and action commands are
 adjusted accordingly.
 */
 
-import planner;
-import worker;
-import support;
-import concurrency;
+import bub.planner;
+import bub.worker;
+import bub.support;
+import bub.concurrency;
 
 import std.file;
 import std.getopt;

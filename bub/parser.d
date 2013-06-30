@@ -21,9 +21,9 @@
 Provides support for parsing text files.
 */
 
-module parser;
+module bub.parser;
 
-import support;
+import bub.support;
 
 import std.ascii;
 import std.file;
