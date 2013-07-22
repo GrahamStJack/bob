@@ -461,6 +461,7 @@ final class Pkg : Node {
 //
 class File : Node {
     static File[string]   byPath;      // Files by their path
+    static File[][string] byName;      // Files by their basename
     static bool[File]     allBuilt;    // all built files
     static bool[File]     outstanding; // outstanding buildable files
     static int            nextNumber;
@@ -514,6 +515,7 @@ class File : Node {
 
         errorUnless(path !in byPath, origin, "%s already defined", path);
         byPath[path] = this;
+        byName[baseName(path)] ~= this;
 
         if (built) {
             ++numBuilt;
@@ -591,12 +593,22 @@ class File : Node {
 
                 // try to find the included file within the project or in the known system headers
 
-                File *file;
                 // under src?
                 File *include = buildPath("src", entry.trail) in byPath;
                 if (include is null) {
                     // under obj?
                     include = buildPath("obj", entry.trail) in byPath;
+                }
+                if (include is null &&
+                    entry.quoted &&
+                    dirName(entry.trail) == ".") {
+                    // Include/import is a simple name only - look for a unique filename that matches.
+                    File[]* files = entry.trail in byName;
+                    if (files !is null) {
+                        errorUnless(files.length == 1, origin,
+                                    "%s is not a unique filename", entry.trail);
+                        include = &(*files)[0];
+                    }
                 }
                 if (include is null) {
                     // Last chance - it might be a known system header or header directory.
@@ -616,8 +628,9 @@ class File : Node {
                 }
                 errorUnless(include !is null,
                             origin,
-                            "Included/imported unknown file %s",
-                            entry.trail);
+                            "Included/imported unknown file %s", entry.trail);
+                errorUnless(include.number < this.number, origin,
+                            "Included/imported file %s declared later", entry.trail);
 
                 // Check for a circular include
                 bool[File] checked;
