@@ -29,6 +29,7 @@ import std.file;
 import std.path;
 import std.range;
 import std.string;
+import std.process;
 
 //-------------------------------------------------------------------------
 // Planner
@@ -205,8 +206,13 @@ final class Action {
                         values = split(resolve(options[varname]));
                     }
                     else {
-                        // Not in Buboptions, so it evaluated to empty.
-                        values = [];
+                        try {
+                            string value = environment[varname];
+                            values = [value];
+                        }
+                        catch (Exception ex) {
+                            values = [];
+                        }
                     }
 
                     // Cross-multiply with prefix and suffix

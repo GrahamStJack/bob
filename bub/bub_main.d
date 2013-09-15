@@ -107,7 +107,7 @@ The file state sequence is:
     initial
     dependencies_clean         skipped if no dependencies
     building                   skipped if no build action
-    up-to-date
+    up_to_date
     scanning_for_includes      skipped if not scannable
     includes_known
     clean
@@ -145,8 +145,12 @@ import std.string;
 int main(string[] args) {
     int  returnValue    = 0;
     auto plannerChannel = new PlannerProtocol.Chan(100);
-    auto workerChannel  = new WorkerProtocol.Chan(100);
+    auto workerChannel  = new WorkerProtocol.Chan(1000);
     // bailerChannel is used by mySignalHandler, so we create that statically.
+
+    // TODO add a thread between the priority queue and the workerChannel so
+    // there is no risk of the planner thread blocking, and reduce the channel sizes
+    // to something sensible, like 10.
 
     try {
         bool printStatements = false;
