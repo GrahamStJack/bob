@@ -240,9 +240,15 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     string envText;
     version(Posix) {
         envText ~= "#!/bin/bash\n";
-        envText ~= toEnv("LD_LIBRARY_PATH", vars, ["SYS_LIB"],  [lib] ~ fromEnv("LD_LIBRARY_PATH"));
-        envText ~= toEnv("PATH",            vars, ["SYS_PATH"], [bin] ~ fromEnv("PATH"));
-        envText ~= "DIST_DATA_PATH=\"" ~ data ~ "\"\n";
+        envText ~= "export " ~ toEnv("LD_LIBRARY_PATH",
+                                     vars,
+                                     ["SYS_LIB"],
+                                     [lib] ~ fromEnv("LD_LIBRARY_PATH"));
+        envText ~= "export " ~ toEnv("PATH",
+                                     vars,
+                                     ["SYS_PATH"],
+                                     [bin] ~ fromEnv("PATH"));
+        envText ~= "export DIST_DATA_PATH=\"" ~ data ~ "\"\n";
     }
     version(Windows) {
         envText ~= toEnv("PATH", vars, ["SYS_LIB", "SYS_PATH"], [lib, bin] ~ fromEnv("PATH"));
@@ -253,7 +259,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
     // Create run script
     version(Posix) {
-        string runText = "#!/bin/bash\nsource " ~ env ~ "\nexec \"$@\"\n";
+        string runText = "#!/bin/bash\nsource " ~ env ~ "\n$@\n";
         update(buildPath(buildDir, "run"), runText, true);
     }
     version(Windows) {
