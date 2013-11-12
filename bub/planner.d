@@ -572,6 +572,7 @@ class File : Node {
     private void scan() {
         errorUnless(!scanned, Origin(path, 1), "%s has been scanned for includes twice!", this);
         scanned = true;
+        bool isD = false;
         if (scannable) {
 
             // scan for includes
@@ -589,6 +590,7 @@ class File : Node {
                 break;
               case ".d":
                 entries = scanForImports(path);
+                isD     = true;
                 break;
               default:
                 fatal("Don't know how to scan %s for includes/imports", path);
@@ -606,6 +608,7 @@ class File : Node {
                     include = buildPath("obj", entry.trail) in byPath;
                 }
                 if (include is null &&
+                    !isD &&
                     entry.quoted &&
                     dirName(entry.trail) == ".") {
                     // Include/import is a simple name only - look for a unique filename that matches.
