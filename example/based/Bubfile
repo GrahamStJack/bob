@@ -1,3 +1,3 @@
 static-lib based : one.d;
 
-test-exe test-one : test_one.d second_file.d;
+test-exe test-one : second_file.d test_one.d;
