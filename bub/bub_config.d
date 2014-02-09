@@ -296,6 +296,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     string[string] pkgPaths;
 
     // Local function to get and check references from a dir's Bubfile
+    // to top-level packages.
     void getReferences(string path) {
         if (!exists(path) || !isDir(path)) {
             writefln("No directory at %s", path);
@@ -323,7 +324,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
                     if (token.length > 0) {
                         string pkgName = token;
-                        if (pkgName !in pkgPaths) {
+                        if (baseName(pkgName) == pkgName && pkgName !in pkgPaths) {
                             string pkgPath;
                             foreach (dir; repoPaths) {
                               string tryPath = buildPath(dir, pkgName);
@@ -332,18 +333,19 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
                                     pkgPath = tryPath;
                                   }
                                   else {
-                                      writefln("Found package %s in both %s and %s",
+                                      writefln("Found top-level package %s in both %s and %s",
                                                pkgName, pkgPath, tryPath);
                                       exit(1);
                                   }
                               }
                             }
                             if (pkgPath is null) {
-                                writefln("Could not find package %s referenced from %s",
+                                writefln("Could not find top-level package %s referenced from %s",
                                          pkgName, bubfile);
                                 exit(1);
                             }
                             else {
+                                writefln("Found top-level package %s in %s", pkgName, pkgPath);
                                 pkgPaths[pkgName] = pkgPath;
                                 getReferences(pkgPath);
                             }
@@ -360,8 +362,8 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     pkgPaths[project] = projectPath;
     getReferences(projectPath);
 
-    foreach (name, path; pkgPaths) {
-        makeSymlink(path, buildPath(localSrcPath, name));
+    foreach (name; pkgPaths.keys.sort) {
+        makeSymlink(pkgPaths[name], buildPath(localSrcPath, name));
     }
 
     // print success
