@@ -150,6 +150,11 @@ void doWork(bool                 printActions,
             }
             else
             {
+                if (printActions) {
+                    // Print the results of successful non-tests in case the
+                    // build command printed something useful.
+                    say("\n%s", readText(resultsPath));
+                }
                 remove(resultsPath);
             }
 
