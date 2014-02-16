@@ -23,6 +23,7 @@ import bub.concurrency;
 import bub.support;
 
 import std.datetime;
+import std.demangle;
 import std.file;
 import std.path;
 import std.process;
@@ -129,7 +130,28 @@ void doWork(bool                 printActions,
 
             if (!bailed) {
                 // Print error message
-                say("\n%s", readText(resultsPath));
+                if (isTest) {
+                    // For tests, print the test output as-is.
+                    say("\n%s", readText(resultsPath));
+                }
+                else {
+                    // For non-tests, attempt to provide demangled versions of symbol names.
+                    say("\n");
+                    foreach (line; readText(resultsPath).splitLines()) {
+                        say("%s", line);
+                        string[] tokens = line.split();
+                        foreach (token; tokens) {
+                            if (token.length > 2 && token[0..2] == "`_") {
+                                token = token[1..$-1];
+                                if (token[$-1] == '\'') token = token[0..$-1];
+                                string nice = demangle(token);
+                                if (nice != token) {
+                                    say("[%s]", nice);
+                                }
+                            }
+                        }
+                    }
+                }
                 say("%s: FAILED\n%s", action, command);
             }
             throw new BailException();
