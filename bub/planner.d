@@ -139,17 +139,20 @@ final class Action {
         }
     }
 
-    // add an extra depend to this action
-    void addDependency(File depend) {
+    // add an extra depend to this action, returning true if it is a new one
+    bool addDependency(File depend) {
         if (issued) fatal("Cannot add a dependancy to issued action %s", this);
         if (builds.length != 1) {
             fatal("cannot add a dependency to an action that builds more than one file: %s", name);
         }
+        bool added;
         if (builds[0] !in depend.dependedBy) {
             depends ~= depend;
             depend.dependedBy[builds[0]] = true;
+            added = true;
             if (g_print_deps) say("%s depends on %s", builds[0].path, depend.path);
         }
+        return added;
     }
 
     // Finalise the action command.
@@ -163,7 +166,9 @@ final class Action {
     //   PROJ_LIB -> Paths of project library dirs relative to build dir.
     //   LIBS     -> Names of all required libraries, without lib prefix or extension.
     void finaliseCommand(string[] libs) {
+        //say("finalising %s command with libs=%s", builds, libs);
         assert(!issued);
+        assert(!finalised);
         finalised = true;
 
         // Local function to expand variables in a string.
@@ -1160,7 +1165,7 @@ void neededLibs(File             target,
     dynamicLibs.sort();
     sysLibs.sort();
 
-    //say("%s requires %s,%s,%s", target, staticLibs, dynamicLibs, sysLibs);
+    //say("%s required libs %s,%s,%s", target, staticLibs, dynamicLibs, sysLibs);
 }
 
 
@@ -1178,7 +1183,6 @@ void neededLibs(File             target,
 final class DynamicLib : File {
     static DynamicLib[StaticLib] byContent; // dynamic libs by the static libs they 'contain'
     Origin origin;
-    bool   augmented;
     string uniqueName;
 
     StaticLib[] staticLibs;
@@ -1240,9 +1244,6 @@ final class DynamicLib : File {
     // another earlier-defined-than-this DynamicLib.
     // Add any required SysLibs to our action.
     override bool augmentAction() {
-        if (augmented) return false;
-        augmented = true;
-
         StaticLib[]  neededStaticLibs;
         DynamicLib[] neededDynamicLibs;
         SysLib[]     neededSysLibs;
@@ -1259,15 +1260,17 @@ final class DynamicLib : File {
         }
         foreach (lib; neededDynamicLibs) {
             if (lib !is this) {
-                action.addDependency(lib);
+                if (action.addDependency(lib)) added = true;
                 libs ~= lib.uniqueName;
-                added = true;
             }
         }
         foreach (lib; neededSysLibs) {
             libs ~= lib.name;
         }
-        action.finaliseCommand(libs);
+        if (!added) {
+            action.finaliseCommand(libs);
+        }
+
         return added;
     }
 }
@@ -1277,8 +1280,6 @@ final class DynamicLib : File {
 // Exe - An executable file
 //
 final class Exe : Binary {
-
-    bool augmented;
 
     // create an executable using files from this package, linking to libraries
     // that contain any included header files, and any required system libraries.
@@ -1322,9 +1323,6 @@ final class Exe : Binary {
     // with the library dependencies that we should now know about via includeAdded().
     // Return true if dependencies were added.
     override bool augmentAction() {
-        if (augmented) return false;
-        augmented = true;
-
         StaticLib[]  neededStaticLibs;
         DynamicLib[] neededDynamicLibs;
         SysLib[]     neededSysLibs;
@@ -1335,19 +1333,19 @@ final class Exe : Binary {
         bool added;
 
         foreach (lib; neededStaticLibs) {
-            action.addDependency(lib);
+            if (action.addDependency(lib)) added = true;
             libs ~= lib.uniqueName;
-            added = true;
         }
         foreach (lib; neededDynamicLibs) {
-            action.addDependency(lib);
+            if (action.addDependency(lib)) added = true;
             libs ~= lib.uniqueName;
-            added = true;
         }
         foreach (lib; neededSysLibs) {
             libs ~= lib.name;
         }
-        action.finaliseCommand(libs);
+        if (!added) {
+            action.finaliseCommand(libs);
+        }
         return added;
     }
 }

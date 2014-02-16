@@ -321,7 +321,7 @@ Include[] scanForImports(string path) {
     int anchor, line=1;
     bool inWord, inImport, ignoring;
 
-    string[] externals = [ "core", "std", "etc" ];
+    string[] externals = [ "core", "std" ];
 
     foreach (int pos, char ch; content) {
         if (ch == '\n') {
