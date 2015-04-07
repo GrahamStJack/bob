@@ -38,6 +38,8 @@ import std.process;
 import std.stdio;
 import std.string;
 
+import core.bitop;
+import core.thread;
 
 //----------------------------------------------------------------------------------------
 // Platform-specific stuff
@@ -248,32 +250,26 @@ alias Protocol!(Message!("success",
 // Signal handling to bail on SIGINT or SIGHUP.
 //-----------------------------------------------------------------------
 
-__gshared Channel!int bailerChannel;
+__gshared ubyte bailFlag = 0;
 
 void doBailer() {
-    try {
-        while (true) {
-            int sig = bailerChannel.receive();
-            say("Got signal %s", sig);
-            killer.bail();
-        }
+    while (volatileLoad(&bailFlag) == 0)
+    {
+        Thread.sleep(dur!("msecs")(50));
     }
-    catch (ChannelFinalized ex) { /* Normal exit. */ }
-    catch (Exception ex) {
-        say("Got unexpected exception %s", ex);
+    if (volatileLoad(&bailFlag) == 1)
+    {
+        say("Got a termination signal - bailing");
+        killer.bail();
     }
 }
 
-extern (C) void mySignalHandler(int sig) nothrow {
-    try {
-        bailerChannel.send(sig);
-    }
-    catch (Exception ex) { assert(0, format("Unexpected exception: %s", ex)); }
+extern (C) void mySignalHandler(int sig) nothrow @nogc @system {
+    volatileStore(&bailFlag, 1);
 }
 
 shared static this() {
-    bailerChannel = new Channel!(int)(100);
-
+    // Register a signal handler for SIGINT and SIGHUP.
     signal(SIGINT, &mySignalHandler);
     version(Posix) {
         signal(SIGHUP, &mySignalHandler);

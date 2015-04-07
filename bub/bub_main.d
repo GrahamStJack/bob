@@ -132,6 +132,8 @@ import std.getopt;
 import std.process;
 import std.string;
 
+import core.bitop;
+
 //--------------------------------------------------------------------------------------
 // main
 //
@@ -252,7 +254,7 @@ int main(string[] args) {
     }
 
     // Shut down the bailer and all the workers.
-    bailerChannel.finalize();
+    volatileStore(&bailFlag, 2);
     workerChannel.finalize();
 
     return returnValue;

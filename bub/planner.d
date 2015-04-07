@@ -834,6 +834,14 @@ class File : Node {
         return a.number - number;
     }
 
+    override bool opEquals(Object o) {
+        return this is o;
+    }
+
+    override nothrow @trusted size_t toHash() {
+      return number;
+    }
+
     // Print a file as its path.
     override string toString() const {
         return path;
@@ -1313,7 +1321,7 @@ final class Exe : Binary {
             result.action = new Action(origin,
                                        pkg,
                                        format("%-15s %s", "TestResult", result.path),
-                                       format("TEST %s", this.path),
+                                       format("TEST ./run %s", this.path),
                                        [result],
                                        [this]);
         }

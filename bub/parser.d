@@ -108,6 +108,14 @@ final class SysLib {
         if (a is null) return  -1;
         return a.number - number;
     }
+
+    override bool opEquals(Object o) {
+        return this is o;
+    }
+
+    override nothrow @trusted size_t toHash() {
+      return number;
+    }
 }
 
 

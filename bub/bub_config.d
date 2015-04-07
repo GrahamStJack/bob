@@ -32,6 +32,7 @@
 // into a project-specific local directory.
 //
 
+import std.algorithm.sorting;
 import std.string;
 import std.getopt;
 import std.path;
@@ -210,7 +211,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
     // Create Buboptions file from vars.
     string bubText;
-    foreach (string var; vars.keys().sort) {
+    foreach (string var; vars.keys().sort()) {
         const string[] tokens = vars[var];
         if (tokens.length) {
             bubText ~= var ~ " =";
@@ -362,7 +363,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     pkgPaths[project] = projectPath;
     getReferences(projectPath);
 
-    foreach (name; pkgPaths.keys.sort) {
+    foreach (name; pkgPaths.keys.sort()) {
         makeSymlink(pkgPaths[name], buildPath(localSrcPath, name));
     }
 
@@ -491,7 +492,7 @@ int main(string[] args) {
     }
 
     string buildDir = args[1];
-    string srcDir   = std.path.getcwd();
+    string srcDir   = std.file.getcwd();
 
 
     //
