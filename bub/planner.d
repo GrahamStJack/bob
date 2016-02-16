@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2013, Graham St Jack.
+ * Copyright 2012-2016, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -1294,30 +1294,35 @@ final class Exe : Binary {
     // Note that any system libraries required by inferred local libraries are
     // automatically linked to.
     this(ref Origin origin, Pkg pkg, string kind, string name_, string[] sourceNames) {
-        // interpret kind
-        string dest, desc;
-        switch (kind) {
-            case "dist-exe": desc = "DistExe"; dest = buildPath("dist", "bin", name_);     break;
-            case "priv-exe": desc = "PrivExe"; dest = buildPath("priv", pkg.trail, name_); break;
-            case "test-exe": desc = "TestExe"; dest = buildPath("priv", pkg.trail, name_); break;
+        string destination() {
+            switch (kind) {
+            case "dist-exe": return buildPath("dist", "bin", name_);
+            case "priv-exe": return buildPath("priv", pkg.trail, name_);
+            case "test-exe": return buildPath("priv", pkg.trail, name_);
             default: assert(0, "invalid Exe kind " ~ kind);
+            }
         }
-        version(Windows) {
-            dest = dest.setExtension(".exe");
+        string description() {
+            switch (kind) {
+            case "dist-exe": return "DistExe";
+            case "priv-exe": return "PrivExe";
+            case "test-exe": return "TestExe";
+            default: assert(0, "invalid Exe kind " ~ kind);
+            }
         }
 
-        super(origin, pkg, name_ ~ "-exe", dest, sourceNames, []);
+        super(origin, pkg, name_ ~ "-exe", destination(), sourceNames, []);
 
         LinkCommand *linkCommand = sourceExt in linkCommands;
         errorUnless(linkCommand && linkCommand.executable != null, origin,
                     "No command to link and executable from sources of extension %s", sourceExt);
 
-        action = new Action(origin, pkg, format("%-15s %s", desc, dest),
+        action = new Action(origin, pkg, format("%-15s %s", description(), path),
                             linkCommand.executable, [this], objs);
 
         if (kind == "test-exe") {
             File result = new File(origin, pkg, name ~ "-result",
-                                   Privacy.PRIVATE, dest ~ "-passed", false, true);
+                                   Privacy.PRIVATE, path ~ "-passed", false, true);
             result.action = new Action(origin,
                                        pkg,
                                        format("%-15s %s", "TestResult", result.path),
