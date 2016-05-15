@@ -10,7 +10,7 @@ development of large C/C++/D projects by:
 
 Some relatively minor but useful additional features are:
 * Building outside the source tree.
-* Support for using source form multiple repositories.
+* Support for using source from multiple repositories.
 * Auto-deleting redundant files from the build directory.
   This one is surprisingly useful, because you can't get false success
   from a file left over from an earlier version.
@@ -82,7 +82,7 @@ with rapidly becomes untenable as the project grows. The usual approach of
 having a very small number of libraries and deferring linking of executables
 till near the end of the build wasn't acceptable because it defeats bub's
 central purpose by having executables that depend on everything. Bub deals
-with this ias follows:
+with this as follows:
 * When specifying libraries, the public and private header files of that
   library are declared.
 * Including a public header from a library establishes a dependency on that
@@ -390,6 +390,6 @@ Dynamic libraries don't count as a use - they are just a repackaging.
 A dynamic library cannot contain the same static library as another dynamic library.
 
 All static libraries referred to by the static libraries in a dynamic library
-must also be packaged in dyamic libraries.
+must also be packaged in dynamic libraries.
 
 All static libraries referred to by public static libraries must also be public.

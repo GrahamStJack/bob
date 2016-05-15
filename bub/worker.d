@@ -29,6 +29,9 @@ import std.path;
 import std.process;
 import std.string;
 
+static import std.stdio;
+
+
 //
 // The worker function.
 //

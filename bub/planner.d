@@ -31,6 +31,9 @@ import std.range;
 import std.string;
 import std.process;
 
+static import std.array;
+
+
 //-------------------------------------------------------------------------
 // Planner
 //

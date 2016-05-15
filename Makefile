@@ -1,9 +1,11 @@
 # Makefile to build bottom-up-build with dmd on linux.
 
-DFLAGS = -g -w -wi -O
+DFLAGS = -g -w -wi -de -O
 
 all : bin/bub bin/bub-config bin/concurrency-test
 
+clean :
+	rm obj/* bin/*
 
 obj/concurrency.o : bub/concurrency.d
 	dmd ${DFLAGS} -c bub/concurrency.d -ofobj/concurrency.o

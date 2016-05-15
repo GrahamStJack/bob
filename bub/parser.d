@@ -30,6 +30,9 @@ import std.file;
 import std.path;
 import std.string;
 
+static import std.array;
+
+
 //
 // Options read from Buboptions file
 //
