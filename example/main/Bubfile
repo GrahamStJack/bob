@@ -1,5 +1,3 @@
-refer util;
-
 # Copy/generate-from everything in the doc subdirectory
 # into priv/main/doc
 misc doc;

@@ -51,53 +51,153 @@ static import std.array;
 //-------------------------------------------------------------------------
 
 //
-// Return the SysLibs implied by include/import of the specified header/module,
-// or an empty array if none are implied.
+// SysLib - represents a library outside the project.
 //
-// The libs are keyed on either a full trail to a header/module, or an ancestor
-// of the trail. eg: one/two/three.h, one/two, or one.
-//
-SysLib[] knownSystemHeader(string header, SysLib[][string] libs) {
-    string trail = header;
-    while (trail != ".") {
-        if (trail in libs) {
-            return libs[trail];
+final class SysLib {
+    static SysLib[string] byName;
+    static int            nextNumber;
+
+    string name;
+    int    number;
+
+    static SysLib get(string name) {
+        if (name !in byName) {
+            return new SysLib(name);
         }
-        trail = dirName(trail);
+        return byName[name];
     }
-    return [];
+
+    private this(string name_) {
+        name   = name_;
+        number = nextNumber++;
+        if (name in byName) fatal("Duplicate SysLib name %s", name);
+        byName[name] = this;
+    }
+
+    override string toString() const {
+        return name;
+    }
+
+    override int opCmp(Object o) const {
+        // Reverse order so sort is highest to lowest
+        if (this is o) return 0;
+        SysLib a = cast(SysLib)o;
+        if (a is null) return  -1;
+        return a.number - number;
+    }
+
+    override bool opEquals(Object o) {
+        return this is o;
+    }
+
+    override nothrow @trusted size_t toHash() {
+        return number;
+    }
 }
 
 
 //
-// Action - specifies how to build some files, and what they depend on
+// DEPS information for the whole project, persisted between builds as a
+// performance optimisation. Populated from file at the start of the build,
+// updated as the build progresses, and flushed to file at the end of the build.
+//
+// This information is used in two quite different ways:
+//
+// * To determine a built file's dependencies, and thus whether the built file
+//   is up to date or not. This uses the old information present in the file at
+//   the start of the build.
+//
+// * Just after all the object files to be directly incorporated into a dynamic
+//   library or executable are up to date, the then-current dependencies of those
+//   object files are used to determie which libraries to link with. That is, it
+//   establishes new dependencies on the libraries, which may cause the build of
+//   the dynamic library or executable to be delayed.
+//
+// Because the cached information has to be correct or not present at all, the
+// cache file is removed after being read, and re-created on flush - and flush
+// creates a temporary file and then renames it.
+//
+class DependencyCache {
+    string[][string] dependencies;
+
+    this() {
+        string path = "dependency-cache";
+        if (path.exists) {
+            foreach (line; path.readText.splitLines) {
+                auto tokens = line.split;
+
+                string   file = tokens[0];
+                string[] deps = tokens[1..$]; 
+
+                dependencies[file] = deps;
+            }
+            path.remove;
+        }
+    }
+
+    void update(string file, string[] deps) {
+        dependencies[file] = deps;
+    }
+
+    void flush() {
+        string content;
+        foreach (file, deps; dependencies) {
+            content ~= file;
+            foreach (dep; deps) {
+                content ~= " " ~ dep;
+            }
+            content ~= "\n";
+        }
+
+        string tmpPath = "dependency-cache.tmp";
+        tmpPath.write(content);
+        tmpPath.rename("dependency-cache");
+    }
+};
+
+
+//
+// Action - specifies how to build some files, and what they depend on.
+//
+// Commands that generate source files are special in that all actions with a
+// higher number must follow them, because otherwise the generated source files
+// might be absent or stale at the time DEPS information is generated.
 //
 final class Action {
     static Action[string]       byName;
     static int                  nextNumber;
+    static int[]                generateNumbers;   // Numbers of all the generate actions
+    static int                  nextGenerateIndex; // The index of the next generate action
+    static long[string]         systemModTimes;    // Mod times of system files
     static PriorityQueue!Action queue;
 
-    string  name;      // the name of the action
-    string  command;   // the action command-string
-    int     number;    // influences build order
-    File[]  inputs;    // files the action directly relies on, specified with initial depends
-    File[]  builds;    // files that this action builds
-    File[]  depends;   // files that the action depend on
-    bool    finalised; // true if the action command has been finalised
-    bool    issued;    // true if the action has been issued to a worker
+    Origin   origin;
+    string   name;      // The name of the action
+    string   command;   // The action command-string
+    int      number;    // Influences build order
+    File[]   inputs;    // The files that constitute this action's INPUT
+    File[]   builds;    // Files that constitute this action's OUTPUT
+    File[]   depends;   // Files that the action depend on
+    long     newest;    // The modification time of the newest system file depended on
+    string[] libs;      // The contents of this action's LIBS
+    bool     issued;    // True if the action has been issued to a worker
 
-    this(Origin origin, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
-        name     = name_;
-        command  = command_;
-        number   = nextNumber++;
-        inputs   = inputs_;
-        builds   = builds_;
-        depends  = inputs_;
-        errorUnless(!(name in byName), origin, "Duplicate command name=%s", name);
+    this(Origin origin_, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
+        origin  = origin;
+        name    = name_;
+        command = command_;
+        number  = nextNumber++;
+        inputs  = inputs_;
+        builds  = builds_;
+        errorUnless(name !in byName, origin, "Duplicate command name=%s", name);
         byName[name] = this;
 
+        foreach (dep; inputs_) {
+            addDependency(dep);
+        }
+
         // All the files built by this action depend on the Bubfile
-        depends ~= pkg.bubfile;
+        addDependency(pkg.bubfile);
 
         // Recognise in-project tools in the command.
         foreach (token; split(command)) {
@@ -106,184 +206,153 @@ final class Action {
                 File *tool = token in File.byPath;
                 errorUnless(tool !is null, origin, "Unknown in-project tool %s", token);
 
-                // Is the tool already involved in this action?
-                bool involved;
-                foreach (file; chain(builds, depends)) {
-                    if (file is *tool) {
-                        involved = true;
-                    }
-                }
-
-                if (!involved) {
-                    // Verify that these built files can refer to it.
-                    foreach (file; builds) {
-                        if (!is(typeof(file.parent) : Pkg) &&
-                            !file.parent.allowsRefTo(origin, *tool))
-                        {
-                            // Add enabling reference from parent to tool
-                            file.parent.addReference(origin, *tool);
-                        }
-                        // Add reference to tool
-                        file.addReference(origin, *tool);
-                    }
-
-                    // Add the dependency.
-                    depends ~= *tool;
-                }
+                // Add the dependency.
+                addDependency(*tool);
             }
         }
 
-        // set up reverse dependencies between builds and depends
-        foreach (depend; depends) {
-            foreach (built; builds) {
-                depend.dependedBy[built] = true;
-                if (g_print_deps) say("%s depends on %s", built.path, depend.path);
+        // Add cached dependencies. Note that we assume that all of the built
+        // files have the same dependencies, and treat the cached dependencies with
+        // some suspicion/leniency, as they can be out of date.
+        auto dependPaths = builds[0].path in File.cache.dependencies;
+        if (dependPaths !is null && dependPaths.length > 0) {
+            foreach (dependPath; *dependPaths) {
+                if (!dependPath.isAbsolute) {
+                    if (dependPath !in File.byPath) {
+                        // Don't know about dependPath, or it refers to a file
+                        // declared later. This is normal, because the cached dependencies
+                        // can become invalidated by Bubfile changes, so just treat the
+                        // built files as out of date.
+                        newest = long.max;
+                        break;
+                    }
+                    else {
+                        // Add the dependency without checking for validity, because this
+                        // cached dependency might be stale.
+                        // The dependency itself is safe because the depend file is already
+                        // defined so there can't be a circle.
+                        auto depend = File.byPath[dependPath];
+                        if (builds[0] !in depend.dependedBy) {
+                            depends ~= depend;
+                            foreach (built; builds) {
+                                depend.dependedBy[built] = true;
+                                if (g_print_deps) say("%s depends on %s", built, depend);
+                            }
+                        }
+                    }
+                }
+                else {
+                    // Assume a system file
+                    if (dependPath !in systemModTimes) {
+                        systemModTimes[dependPath] = dependPath.modifiedTime(false);
+                    }
+                    newest = max(newest, systemModTimes[dependPath]);
+                }
             }
+        }
+        else {
+            // Unknown dependencies, so we are out of date
+            newest = long.max;
         }
     }
 
     // add an extra depend to this action, returning true if it is a new one
     bool addDependency(File depend) {
         if (issued) fatal("Cannot add a dependancy to issued action %s", this);
-        if (builds.length != 1) {
-            fatal("cannot add a dependency to an action that builds more than one file: %s", name);
-        }
         bool added;
         if (builds[0] !in depend.dependedBy) {
+            foreach (built; builds) {
+                built.checkCanDepend(depend);
+                depend.dependedBy[built] = true;
+                if (g_print_deps) say("%s depends on %s", built, depend);
+            }
             depends ~= depend;
-            depend.dependedBy[builds[0]] = true;
             added = true;
-            if (g_print_deps) say("%s depends on %s", builds[0].path, depend.path);
+        }
+        if (added && builds.length != 1) {
+            fatal("cannot add a dependency to an action that builds more than one file: %s", name);
         }
         return added;
     }
 
-    // Finalise the action command.
+    // Flag this action as generating source files
+    void setGenerate() {
+        generateNumbers ~= number;
+    }
+
+    // Flag this action as done, attempting to issue any actions waiting on it
+    void done() {
+        issued = true;
+        if (nextGenerateIndex >= generateNumbers.length ||
+            number == generateNumbers[nextGenerateIndex])
+        {
+            // This is the next generate action - attempt to issue any actions with numbers
+            // less than ours.
+            if (nextGenerateIndex < generateNumbers.length) nextGenerateIndex++;
+            int fence =
+                nextGenerateIndex < generateNumbers.length ?
+                generateNumbers[nextGenerateIndex] :
+                int.max;
+            foreach (file, dummy; File.outstanding) {
+                if (file.action &&
+                    !file.action.issued &&
+                    file.action.number <= fence)
+                {
+                    file.issueIfReady();
+                }
+            }
+        }
+    }
+
+    // Set the ${LIBS} that this action will use
+    void setLibs(string[] libs_) {
+        libs = libs_;
+    }
+
+    // Return the path of any ${DEPS} file this action will use
+    string depsPath() {
+        return format("DEPENDENCIES-%s", number);
+    }
+
+    // issue this action
     // Commands can contain any number of ${varname} instances, which are
     // replaced with the content of the named variable, cross-multiplied with
     // any adjacent text.
     // Special variables are:
-    //   INPUT    -> Paths of the input files.
-    //   OUTPUT   -> Paths of the built files.
-    //   PROJ_INC -> Paths of project include/import dirs relative to build dir.
-    //   PROJ_LIB -> Paths of project library dirs relative to build dir.
-    //   LIBS     -> Names of all required libraries, without lib prefix or extension.
-    void finaliseCommand(string[] libs) {
-        //say("finalising %s command with libs=%s", builds, libs);
-        assert(!issued);
-        assert(!finalised);
-        finalised = true;
-
-        // Local function to expand variables in a string.
-        string resolve(string text) {
-            string result;
-
-            bool   inToken, inCurly;
-            size_t anchor;
-            char   prev;
-            string prefix, varname, suffix;
-
-            // Local function to finish processing a token.
-            void finishToken(size_t pos) {
-                suffix = text[anchor .. pos];
-                size_t start = result.length;
-
-                string[] values;
-                if (varname.length) {
-                    // Get the variable's values
-                    if      (varname == "INPUT") {
-                        foreach (file; inputs) {
-                            values ~= file.path;
-                        }
-                    }
-                    else if (varname == "OUTPUT") {
-                        foreach (file; builds) {
-                            values ~= file.path;
-                        }
-                    }
-                    else if (varname == "PROJ_INC") {
-                        values = ["src", "obj"];
-                    }
-                    else if (varname == "PROJ_LIB") {
-                        values = [buildPath("dist", "lib"), "obj"];
-                    }
-                    else if (varname == "LIBS") {
-                        values = libs;
-                    }
-                    else if (varname in options) {
-                        values = split(resolve(options[varname]));
-                    }
-                    else {
-                        try {
-                            string value = environment[varname];
-                            values = [value];
-                        }
-                        catch (Exception ex) {
-                            values = [];
-                        }
-                    }
-
-                    // Cross-multiply with prefix and suffix
-                    foreach (value; values) {
-                        result ~= prefix ~ value ~ suffix ~ " ";
-                    }
-                }
-                else {
-                    // No variable - just use the suffix
-                    result ~= suffix ~ " ";
-                }
-
-                // Clean up for next token
-                prefix  = "";
-                varname = "";
-                suffix  = "";
-                inToken = false;
-                inCurly = false;
-            }
-
-            foreach (pos, ch; text) {
-                if (!inToken && !isWhite(ch)) {
-                    // Starting a token
-                    inToken = true;
-                    anchor  = pos;
-                }
-                else if (inToken && ch == '{' && prev == '$') {
-                    // Starting a varname within a token
-                    prefix  = text[anchor .. pos-1];
-                    inCurly = true;
-                    anchor  = pos + 1;
-                }
-                else if (ch == '}') {
-                    // Finished a varname within a token
-                    if (!inCurly) {
-                        fatal("Unmatched '}' in '%s'", text);
-                    }
-                    varname = text[anchor .. pos];
-                    inCurly = false;
-                    anchor  = pos + 1;
-                }
-                else if (inToken && isWhite(ch)) {
-                    // Finished a token
-                    finishToken(pos);
-                }
-                prev = ch;
-            }
-            if (inToken) {
-                finishToken(text.length);
-            }
-            return result.strip();
-        }
-
-        command = resolve(command);
-    }
-
-    // issue this action
+    //   INPUT  -> Paths of the input files.
+    //   DEPS   -> Path to a temporary dependencies file.
+    //   OUTPUT -> Paths of the built files.
+    //   LIBS   -> Names of all required libraries, without lib prefix or extension.
     void issue() {
         assert(!issued);
-        if (!finalised) {
-            finaliseCommand([]);
-        }
         issued = true;
+
+        string[string] extras;
+        extras["DEPS"] = depsPath;
+        {
+            string value;
+            foreach (file; inputs) {
+                value ~= " " ~ file.path;
+            }
+            extras["INPUT"] = strip(value);
+        }
+        {
+            string value;
+            foreach (file; builds) {
+                value ~= " " ~ file.path;
+            }
+            extras["OUTPUT"] = strip(value);
+        }
+        {
+            string value;
+            foreach (lib; libs) {
+                value ~= " " ~ lib;
+            }
+            extras["LIBS"] = strip(value);
+        }
+
+        command = resolveCommand(command, extras);
+
         queue.insert(this);
     }
 
@@ -291,7 +360,7 @@ final class Action {
         return name;
     }
     override int opCmp(Object o) const {
-        // reverse order
+        // Reverse order so that a prority queue presents low numbers first
         if (this is o) return 0;
         Action a = cast(Action)o;
         if (a is null) return  -1;
@@ -301,26 +370,22 @@ final class Action {
 
 
 //
-// Node - abstract base class for things in an ownership tree
-// with cross-linked dependencies. Used to manage allowed references.
+// Node - abstract base class for things in an ownership tree.
+//
+// Used to manage visibility and trails.
 //
 
-// additional constraint on allowed references
-enum Privacy { PUBLIC,           // no additional constraint
-               SEMI_PROTECTED,   // only accessable to descendents of grandparent
-               PROTECTED,        // only accessible to children of parent
-               PRIVATE }         // not accessible
+// Additional constraint on allowed dependencies
+enum Privacy { PUBLIC, PROTECTED, PRIVATE }
 
 //
 // return the privacy implied by args
 //
 Privacy privacyOf(ref Origin origin, string[] args) {
     if (!args.length ) return Privacy.PUBLIC;
-    else if (args[0] == "protected")      return Privacy.PROTECTED;
-    else if (args[0] == "semi-protected") return Privacy.SEMI_PROTECTED;
-    else if (args[0] == "private")        return Privacy.PRIVATE;
-    else if (args[0] == "public")         return Privacy.PUBLIC;
-    else error(origin, "privacy must be one of public, semi-protected, protected or private");
+    else if (args[0] == "protected") return Privacy.PROTECTED;
+    else if (args[0] == "public")    return Privacy.PUBLIC;
+    else error(origin, "privacy must be one of public or protected");
     assert(0);
 }
 
@@ -339,37 +404,34 @@ class Node {
         return trail;
     }
 
-    // create the root of the tree
-    this() {
-        trail = "root";
-        assert(trail !in byTrail, "already have root node");
-        byTrail[trail] = this;
-    }
-
     // create a node and place it into the tree
     this(Origin origin, Node parent_, string name_, Privacy privacy_) {
-        assert(parent_);
         errorUnless(dirName(name_) == ".",
                     origin,
                     "Cannot define node with multi-part name '%s'", name_);
         parent  = parent_;
         name    = name_;
         privacy = privacy_;
-        if (parent.parent) {
-            // child of non-root
+
+        if (parent && parent.parent) {
+            // Child of non-root
             trail = buildPath(parent.trail, name);
         }
         else {
-            // child of the root
+            // Root or child of the root
             trail = name;
         }
-        parent.children ~= this;
+
+        if (parent) {
+            parent.children ~= this;
+        }
+
         errorUnless(trail !in byTrail, origin, "%s already known", trail);
         byTrail[trail] = this;
     }
 
-    // return true if this is a descendant of other
-    private bool isDescendantOf(Node other) {
+    // return true if this is other or a descendant of other
+    bool isDescendantOf(Node other) {
         for (auto node = this; node !is null; node = node.parent) {
             if (node is other) return true;
         }
@@ -377,79 +439,43 @@ class Node {
     }
 
     // return true if this is a visible descendant of other
-    private bool isVisibleDescendantOf(Node other, Privacy allowed) {
-        for (auto node = this; node !is null; node = node.parent) {
-            if (node is other)            return true;
-            if (node.privacy > allowed)   break;
-            if (allowed > Privacy.PUBLIC) allowed--;
-        }
-        return false;
-    }
+    bool isVisibleDescendantOf(Node other) {
+        // This starts out visible to itself
+        Privacy effective = Privacy.PUBLIC;
 
-    // return true if other is a visible-child or reference of this,
-    // or is a visible-descendant of them
-    bool allowsRefTo(ref Origin origin,
-                     Node       other,
-                     size_t     depth        = 0,
-                     Privacy    allowPrivacy = Privacy.PROTECTED,
-                     bool[Node] checked      = null) {
-        errorUnless(depth < 100, origin,
-                    "circular reference involving %s referring to %s",
-                    this,
-                    other);
-        //say("for %s: checking if %s allowsReferenceTo %s", origin.path, this, other);
-        if (other is this || other.isVisibleDescendantOf(this, allowPrivacy)) {
-            if (g_print_details) say("%s allows reference to %s via containment", this, other);
-            return true;
-        }
-        foreach (node; refers) {
-            // referred-to nodes grant access to their public children, and referred-to
-            // siblings grant access to their semi-protected children
-            if (node !in checked) {
-                checked[node] = true;
-                if (node.allowsRefTo(origin,
-                                     other,
-                                     depth+1,
-                                     node.parent is this.parent ?
-                                     Privacy.SEMI_PROTECTED : Privacy.PUBLIC,
-                                     checked)) {
-                    if (g_print_details) {
-                        say("%s allows reference to %s via explicit reference", this, other);
-                    }
-                    return true;
-                }
+        for (auto node = this; node !is null; node = node.parent) {
+            if (effective == Privacy.PRIVATE) {
+                // This is invisible to node
+                return false;
+            }
+            if (node is other) {
+                // Other is an ancestor and lower nodes don't render this invisible
+                return true;
+            }
+
+            // Update effective privacy before advancing to parent
+            if (effective > Privacy.PUBLIC) {
+                // Privacy increases with distance
+                ++effective;
+            }
+            if (node.privacy > effective) {
+                // Node applies more privacy
+                effective = node.privacy;
             }
         }
+        // Not a descendant of other
         return false;
     }
 
-    // Add a reference to another node. Cannot refer to:
-    // * Nodes that aren't defined yet.
-    // * Self.
-    // * Ancestors.
-    // * Nodes whose selves or ancestors have not been referred to by our parent.
-    // Also can't explicitly refer to children - you get that implicitly.
-    final void addReference(ref Origin origin, Node other, string cause = null) {
-        errorUnless(other !is null, origin,
-                    "%s cannot refer to NULL node", this);
-
-        errorUnless(other != this, origin,
-                    "%s cannot refer to self", this);
-
-        errorUnless(!this.isDescendantOf(other), origin,
-                    "%s cannot refer to ancestor %s", this, other);
-
-        errorUnless(!other.isDescendantOf(this), origin,
-                    "%s cannnot explicitly refer to descendant %s", this, other);
-
-        errorUnless(this.parent.allowsRefTo(origin, other), origin,
-                    "Parent %s does not allow %s to refer to %s", parent, this, other);
-
-        errorUnless(!other.allowsRefTo(origin, this), origin,
-                    "%s cannot refer to %s because of a circularity", this, other);
-
-        if (g_print_deps) say("%s refers to %s%s", this, other, cause);
-        refers ~= other;
+    // Return this Node's common ancestor with another Node
+    Node commonAncestorWith(Node other) {
+        for (auto node = this; node !is null; node = node.parent) {
+            if (node is other || other.isDescendantOf(node)) {
+                return node;
+            }
+        }
+        fatal("%s and %s have no common ancestor", this, other);
+        assert(0);
     }
 }
 
@@ -465,7 +491,20 @@ final class Pkg : Node {
 
     this(Origin origin, Node parent_, string name_, Privacy privacy_) {
         super(origin, parent_, name_, privacy_);
-        bubfile = File.addSource(origin, this, "Bubfile", Privacy.PRIVATE, false);
+        bubfile = File.addSource(origin, this, "Bubfile", Privacy.PUBLIC);
+    }
+
+    // Return the Pkg that directly contains or is the given Node
+    static Pkg getPkgOf(Node given) {
+        Node node = given;
+        while (true) {
+            Pkg pkg = cast(Pkg) node;
+            if (pkg) {
+                return pkg;
+            }
+            node = node.parent;
+            if (!node) fatal("Node %s has no Pkg in its ancestry", given);
+        }
     }
 }
 
@@ -474,58 +513,44 @@ final class Pkg : Node {
 // A file
 //
 class File : Node {
-    static File[string]   byPath;      // Files by their path
-    static File[][string] byName;      // Files by their basename
-    static bool[File]     allBuilt;    // all built files
-    static bool[File]     outstanding; // outstanding buildable files
-    static int            nextNumber;
+    static DependencyCache cache;       // Cache of information gleaned from ${DEPS} in commands
+    static File[string]    byPath;      // Files by their path
+    static File[][string]  byName;      // Files by their basename
+    static bool[File]      allBuilt;    // all built files
+    static bool[File]      outstanding; // outstanding buildable files
+    static int             nextNumber;
 
     // Statistics
-    static uint numBuilt;              // number of files targeted
-    static uint numUpdated;            // number of files successfully updated by actions
+    static uint numBuilt;   // number of files targeted
+    static uint numUpdated; // number of files successfully updated by actions
 
-    string     path;                   // the file's path
-    int        number;                 // order of file creation
-    bool       scannable;              // true if the file should be scanned
-    bool       built;                  // true if this file will be built by an action
-    Action     action;                 // the action used to build this file (null if non-built)
+    Origin     origin;
+    string     path;        // the file's path
+    int        number;      // order of file creation
+    bool       built;       // true if this file will be built by an action
+    Action     action;      // the action used to build this file (null if non-built)
 
-    long       modTime;                // the modification time of this file
-    bool       used;                   // true if this file has been used already
-
-    // state-machine stuff
-    bool         scanned;                // true if this has already been scanned for includes
-    Origin[File] includes;               // Origins by the Files this includes
-    bool[File]   includedBy;             // Files that include this
-    bool[File]   dependedBy;             // Files that depend on this
-    bool         clean;                  // true if usable by higher-level files
+    long       modTime;     // the modification time of this file
+    bool       used;        // true if this file has been used already
+    bool       augmented;   // true if augmentAction() has already been called
+    bool[File] dependedBy;  // Files that depend on this
 
     // return a prospective path to a potential file.
     static string prospectivePath(string start, Node parent, string extra) {
-        Node node = parent;
-        while (node !is null) {
-            Pkg pkg = cast(Pkg) node;
-            if (pkg) {
-                return buildPath(start, pkg.trail, extra);
-            }
-            node = node.parent;
-        }
-        fatal("prospective file %s's parent %s has no package in its ancestry", extra, parent);
-        assert(0);
+        return buildPath(start, Pkg.getPkgOf(parent).trail, extra);
     }
 
-    this(ref Origin origin, Node parent_, string name_, Privacy privacy_, string path_,
-         bool scannable_, bool built_)
-    {
+    this(ref Origin origin, Node parent_, string name_, Privacy privacy_, string path_, bool built_) {
         super(origin, parent_, name_, privacy_);
 
+        this.origin = origin;
+
         path      = path_;
-        scannable = scannable_;
         built     = built_;
 
         number    = nextNumber++;
 
-        modTime   = modifiedTime(path, built);
+        modTime   = path.modifiedTime(built);
 
         errorUnless(path !in byPath, origin, "%s already defined", path);
         byPath[path] = this;
@@ -539,7 +564,7 @@ class File : Node {
     }
 
     // Add a source file specifying its trail within its package
-    static File addSource(ref Origin origin, Node parent, string extra, Privacy privacy, bool scannable) {
+    static File addSource(Origin origin, Node parent, string extra, Privacy privacy) {
 
         // possible paths to the file
         string path1 = prospectivePath("obj", parent, extra);  // a built file in obj directory tree
@@ -555,7 +580,7 @@ class File : Node {
         }
         else if (exists(path2)) {
             // a source file under src
-            return new File(origin, parent, name, privacy, path2, scannable, false);
+            return new File(origin, parent, name, privacy, path2, false);
         }
         else {
             error(origin, "Could not find source file %s in %s, or %s", name, path1, path2);
@@ -564,267 +589,133 @@ class File : Node {
     }
 
     // This file has been updated
-    final void updated() {
+    final void updated(string[] inputs) {
         ++numUpdated;
-        modTime = modifiedTime(path, true);
-        if (g_print_details) say("Updated %s, mod_time %s", this, modTime);
-        if (action !is null) {
-            action = null;
-            outstanding.remove(this);
+        modTime = path.modifiedTime(true);
+        if (g_print_deps) say("Updated %s", this);
+
+        // Extract updated dependency information from action.depsPath,
+        // validate it, and update the cache.
+        // We don't actually update dependencies here, because they apply to the
+        // next bub run - but we have to make sure that they will be valid then,
+        // and not have any cached dependencies for this file if they are invalid.
+        string[] deps = parseDeps(action.depsPath, inputs);
+        cache.dependencies.remove(path); // remove from cache in case of failure
+        bool[string] isInput;
+        foreach (input; inputs) isInput[input] = true;
+        foreach (dep; deps) {
+            if (!dep.isAbsolute && dep !in isInput) {
+                File* depend = dep in File.byPath;
+                errorUnless(depend !is null, origin, "%s depends on unknown '%s'", this, dep);
+                if (g_print_deps && this !in depend.dependedBy) {
+                    say("After update, %s will depend on %s", this, *depend);
+                }
+                checkCanDepend(*depend);
+            }
         }
-        touch();
+        cache.update(path, deps); // success - put new information back into cache
+
+        upToDate();
     }
 
-    // Scan this file for includes/imports, incorporating them into the
-    // dependency graph.
-    private void scan() {
-        errorUnless(!scanned, Origin(path, 1), "%s has been scanned for includes twice!", this);
-        scanned = true;
-        bool isD = false;
-        if (scannable) {
+    // Mark this file as up to date
+    void upToDate() {
+        auto act = action;
+        action = null;
+        act.done();
+        outstanding.remove(this);
 
-            // scan for includes
-            Include[] entries;
-            switch (path.extension()) {
-              case ".c":
-              case ".h":
-              case ".cc":
-              case ".hh":
-              case ".cxx":
-              case ".hxx":
-              case ".cpp":
-              case ".hpp":
-                entries = scanForIncludes(path);
-                break;
-              case ".d":
-                entries = scanForImports(path);
-                isD     = true;
-                break;
-              default:
-                fatal("Don't know how to scan %s for includes/imports", path);
+        // Actions that depend on this may be able to be issued now
+        if (g_print_deps) say("Checking files that depend on %s: %s", this, dependedBy.keys);
+        foreach (other; dependedBy.keys) {
+            other.issueIfReady();
+        }
+    }
+
+    // Advance this file's action through its states:
+    // waiting-to-issue-action, action-issued, up-to-date
+    final void issueIfReady() {
+        if (action && !action.issued) {
+            bool wait;
+            bool dirty = action.newest > modTime;
+            if (dirty && g_print_deps) say("%s system dependencies are younger", this);
+
+            if (action.nextGenerateIndex < action.generateNumbers.length &&
+                action.number > action.generateNumbers[action.nextGenerateIndex])
+            {
+                // Wait even though this file might already be up to date,
+                // as it is cheaper to do this check than the depend one, and
+                // this function may be called many times. 
+                wait = true;
+                if (g_print_deps) say("%s [%s] waiting for generated files", path, action.number);
             }
-
-            foreach (entry; entries) {
-                Origin origin = Origin(this.path, entry.line);
-
-                // try to find the included file within the project or in the known system headers
-
-                // under src?
-                File *include = buildPath("src", entry.trail) in byPath;
-                if (include is null) {
-                    // under obj?
-                    include = buildPath("obj", entry.trail) in byPath;
-                }
-                if (include is null &&
-                    !isD &&
-                    entry.quoted &&
-                    dirName(entry.trail) == ".") {
-                    // Include/import is a simple name only - look for a unique filename that matches.
-                    File[]* files = entry.trail in byName;
-                    if (files !is null) {
-                        errorUnless(files.length == 1, origin,
-                                    "%s is not a unique filename", entry.trail);
-                        include = &(*files)[0];
+            else {
+                foreach (depend; action.depends) {
+                    if (depend.action) {
+                        if (g_print_deps) say("%s waiting for %s", this, depend);
+                        wait = true;
+                        break;
                     }
-                }
-                if (include is null) {
-                    // Last chance - it might be a known system header or header directory.
-
-                    SysLib[] libs = knownSystemHeader(entry.trail, SysLib.byHeader);
-                    if (libs.length > 0) {
-                        // known system header or system header directory -
-                        // tell containers about it so they can pick up SysLibs
-                        //say("included external header %s", entry.trail);
-                        systemHeaderIncluded(origin, this, libs);
-                        continue;
-                    }
-                    else if (!entry.quoted) {
-                        // Ignore unknown C/C++ <system> includes, hoping they are from std libs
-                        continue;
-                    }
-                }
-                errorUnless(include !is null,
-                            origin,
-                            "Included/imported unknown file %s", entry.trail);
-                errorUnless(include.number < this.number, origin,
-                            "Included/imported file %s declared later", entry.trail);
-
-                // Check for a circular include
-                bool[File] checked;
-                void checkCircularity(File other, string explanation) {
-                    errorUnless(other !is this, origin,
-                                "Circular include: %s", explanation);
-                    if (other !in checked) {
-                        foreach (next; other.includes.keys) {
-                            checkCircularity(next, explanation ~ " -> " ~ next.path);
+                    else if (!dirty) {
+                        if (depend.modTime > modTime) {
+                            if (g_print_deps) say("%s dependency %s is younger", this, depend);
+                            dirty = true;
                         }
-                        checked[other] = true;
                     }
                 }
-                checkCircularity(*include, path ~ " -> " ~ include.path);
+                if (!wait && g_print_deps) say("%s dependencies are up to date", this);
 
-                // Add the include
-                if (g_print_deps) say("%s includes/imports %s", this.path, include.path);
-                includes[*include] = origin;
-                include.includedBy[this] = true;
+                if (!wait && !augmented) {
+                    // All or initial dependencies are satisfied and we haven't yet updated
+                    // our dependencies from the now-updated cache - do so now.
+                    augmented = true;
+                    if (augmentAction()) {
+                        if (g_print_deps) say("%s dependencies augmented - rechecking", this);
+                        issueIfReady();
+                        return;
+                    }
+                }
+            }
+            if (!wait) { 
+                if (dirty) {
+                    // Out of date - issue the action
+                    action.issue();
+                }
+                else {
+                    // Up to date - no need for building
+                    if (g_print_deps) say("%s is already up to date", path);
+                    upToDate();
+                }
             }
         }
     }
 
-    // Add all the relationships implied by this file's includes.
-    // IMPORTANT - called once, just before this file becomes clean,
-    // which means that it is up to date and all its includes are also clean.
-    // The delayed resolution is necessary because includes are discovered in
-    // an arbitrary order, so we have to wait till all the down-stream includes
-    // are discovered before we can work out what they mean.
-    // Here are the implications of an include:
-    // * Each direct or transitive include adds a dependency to this file's dependents.
-    // * This file's dependents (see Binary) may infer extra things from the direct includes.
-    // * Each direct include implies a reference from this to the include.
-    void resolveIncludes() {
-
-        bool[File] got;
-
-        // Resolve consequences of transitive include
-        void resolve(Origin origin, File includer, File included) {
-
-            if (included in got) {
-                return;
-            }
-            got[included] = true;
-
-            // Our dependents also depend on the included file.
-            foreach (dependent; dependedBy.keys()) {
-                errorUnless(dependent.action !is null, origin, "%s has no action", dependent.path);
-                dependent.action.addDependency(included);
-            }
-
-            // Transit into included's includes
-            foreach (included2, origin2; included.includes) {
-                resolve(origin2, included, included2);
-            }
-        }
-
-        foreach (included, origin; includes) {
-            // This file's dependents may want to know about the include too.
-            includeAdded(origin, this, included);
-
-            // Now (after includeAdded calls so this File's parents have had a chance to
-            // add an enabling reference), add a reference between this file and the
-            // included one.
-            addReference(origin, included);
-
-            // This file's dependents depend on this file's transitive includes.
-            resolve(origin, this, included);
-        }
-    }
-
-    // An include has been added from includer to included.
-    // Specialisations of File override to infer linking to in-project libraries.
-    void includeAdded(ref Origin origin, File includer, File included) {
-        foreach (depend; dependedBy.keys()) {
-            depend.includeAdded(origin, includer, included);
-        }
-    }
-
-    // A system header has been included by includer (which is this or a file this depends on).
-    // Specialisations of File override to infer linking to SysLibs.
-    void systemHeaderIncluded(ref Origin origin, File includer, SysLib[] libs) {
-        foreach (depend; dependedBy.keys()) {
-            depend.systemHeaderIncluded(origin, includer, libs);
-        }
-    }
-
-    // This file's action is about to be issued, and this is the last chance to
-    // add dependencies to it. Specialisations should override this method, and at the
-    // very least finalise the action's command.
-    // Return true if dependencies were added.
+    // File specialisations that use the DependencyCache to determine things like
+    // dependencies on libraries and what libraries to link with should specialise
+    // this function. It will be called once, when all of the File's explicitly-stated
+    // dependencies are up to date, and thus all of the DependencyCache entries this
+    // File cares about are up to date.
+    //
+    // Return true if a new dependency has been added.
     bool augmentAction() {
-        if (action) {
-            action.finaliseCommand([]);
-        }
         return false;
     }
 
-    // Work out if this File's state should change, and if its Action should be issued.
-    final void touch() {
-        if (clean) return;
-        if (g_print_details) say("Touching %s", path);
-        long newest;
+    // Check that this file can depend on other
+    void checkCanDepend(File other) {
+        Pkg  thisPkg        = Pkg.getPkgOf(this);
+        Pkg  otherPkg       = Pkg.getPkgOf(other);
+        Node commonAncestor = commonAncestorWith(other);
 
-        if (action && !action.issued) {
-            // this item's action may need to be issued
-            //say("file %s touched", this);
-
-            for (;;) {
-                foreach (depend; action.depends) {
-                    if (!depend.clean) {
-                        if (g_print_details) {
-                            say("%s waiting for %s to become clean", path, depend.path);
-                        }
-                        return;
-                    }
-                    if (newest < depend.modTime) {
-                        newest = depend.modTime;
-                    }
-                }
-                // all files this one depends on are clean
-
-                // give this file a chance to augment its action
-                if (!augmentAction()) {
-                    // No dependencies added - we know our newest dependency modTime
-                    break;
-                }
-
-                // Dependency added - go around again to re-check dependencies
-            }
-
-            // We can issue the action now if this file is out of date
-            if (modTime < newest) {
-                // Out of date - issue action to worker
-                if (g_print_details) {
-                    say("%s is out of date with mod_time %s", this, modTime);
-                }
-                action.issue();
-                return;
-            }
-            else {
-                // already up to date - no need for building
-                if (g_print_details) say("%s is up to date", path);
-                action = null;
-                outstanding.remove(this);
-            }
-        }
-
-        if (action) {
-            // Still waiting for action to be issued or complete
-            return;
-        }
-        errorUnless(modTime > 0, Origin(path, 1),
-                    "%s is up to date with zero mod_time!", path);
-        // This file is up to date
-
-        // If we haven't already scanned for includes, do it now.
-        if (!scanned) scan();
-
-        foreach (include; includes.keys()) {
-            if (!include.clean) {
-                // Can't progress until all our includes are clean
-                return;
-            }
-        }
-
-        // Work through all the implications of this file's includes, now that
-        // all owr down-stream includes are clean.
-        resolveIncludes();
-
-        // We are now squeaky clean
-        clean = true;
-
-        // touch everything that includes or depends on this
-        foreach (other; chain(includedBy.keys(), dependedBy.keys())) {
-            other.touch();
-        }
+        errorUnless(this.number > other.number || other.isDescendantOf(this), origin,
+                    "%s cannot depend on later-defined %s", this, other);
+        errorUnless(thisPkg is otherPkg || !thisPkg.isDescendantOf(otherPkg),
+                    origin,
+                    "%s (%s) cannot depend on %s (%s), whose package is an ancestor",
+                    this, this.trail, other, other.trail);
+        errorUnless(other.isVisibleDescendantOf(commonAncestor), origin,
+                    "%s (%s) cannot depend on %s (%s), which isn't visible via %s (%s)",
+                    this, this.trail, other, other.trail, commonAncestor, commonAncestor.trail);
     }
 
     // Sort Files by decreasing number order. Used to determine the order
@@ -849,7 +740,6 @@ class File : Node {
     override string toString() const {
         return path;
     }
-
 }
 
 
@@ -866,34 +756,35 @@ string validateExtension(Origin origin, string newExt, string usingExt) {
     return result;
 }
 
+
 //
 // Binary - a binary file which incorporates object files and 'owns' source files.
 // Concrete implementations are StaticLib and Exe.
 //
 abstract class Binary : File {
-    static Binary[File] byContent; // binaries by the header and body files they 'contain'
+    static Binary[File] byContent; // binaries by the source and obj files they 'contain'
 
+    File[]       sources;
     File[]       objs;
-    File[]       headers;
     bool[File]   publics;
     bool[SysLib] reqSysLibs;
-    bool[Binary] reqBinaries;
-    string       sourceExt;  // The source extension object files are compiled from.
+    string       sourceExt;
 
-    // create a binary using files from this package.
+    // Create a binary using files from this package.
     // The sources may be already-known built files or source files in the repo,
     // but can't already be used by another Binary.
     this(ref Origin origin, Pkg pkg, string name_, string path_,
-         string[] publicSources, string[] protectedSources) {
+         string[] publicSources, string[] protectedSources, string[] sysLibs) {
 
-        super(origin, pkg, name_, Privacy.PUBLIC, path_, false, true);
+        super(origin, pkg, name_, Privacy.PUBLIC, path_, true);
 
         // Local function to add a source file to this Binary
         void addSource(string name, Privacy privacy) {
 
             // Create a File to represent the named source file.
             string ext = extension(name);
-            File sourceFile = File.addSource(origin, this, name, privacy, isScannable(ext));
+            File sourceFile = File.addSource(origin, this, name, privacy);
+            sources ~= sourceFile;
 
             errorUnless(sourceFile !in byContent, origin, "%s already used", sourceFile.path);
             byContent[sourceFile] = this;
@@ -902,8 +793,8 @@ abstract class Binary : File {
 
             // Look for a command to do something with the source file.
 
-            CompileCommand  *compile  = ext in compileCommands;
-            GenerateCommand *generate = ext in generateCommands;
+            auto compile  = ext in compileCommands;
+            auto generate = ext in generateCommands;
 
             if (compile) {
                 // Compile an object file from this source.
@@ -918,7 +809,7 @@ abstract class Binary : File {
                     string destName = sourceFile.name.setExtension(".obj");
                 }
                 string destPath = prospectivePath("obj", sourceFile.parent, destName);
-                File obj = new File(origin, this, destName, Privacy.PUBLIC, destPath, false, true);
+                File obj = new File(origin, this, destName, Privacy.PUBLIC, destPath, true);
                 objs ~= obj;
 
                 errorUnless(obj !in byContent, origin, "%s already used", obj.path);
@@ -926,7 +817,7 @@ abstract class Binary : File {
 
                 string actionName = format("%-15s %s", "Compile", sourceFile.path);
 
-                obj.action = new Action(origin, pkg, actionName, compile.command,
+                obj.action = new Action(origin, pkg, actionName, *compile,
                                         [obj], [sourceFile]);
             }
             else if (generate) {
@@ -937,29 +828,25 @@ abstract class Binary : File {
                 foreach (suffix; generate.suffixes) {
                     string destName = stripExtension(name) ~ suffix;
                     string destPath = buildPath("obj", parent.trail, destName);
-                    File gen = new File(origin, this, destName, privacy, destPath,
-                                        isScannable(suffix), true);
+                    File gen = new File(origin, this, destName, privacy, destPath, true);
                     files    ~= gen;
                     suffixes ~= suffix ~ " ";
                 }
-                Action action = new Action(origin,
-                                           pkg,
-                                           format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
-                                           generate.command,
-                                           files,
-                                           [sourceFile]);
+                Action genAction = new Action(origin,
+                                              pkg,
+                                              format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
+                                              generate.command,
+                                              files,
+                                              [sourceFile]);
+                genAction.setGenerate();
                 foreach (gen; files) {
-                    gen.action = action;
+                    gen.action = genAction;
                 }
 
                 // And add them as sources too.
                 foreach (gen; files) {
                     addSource(gen.name, privacy);
                 }
-            }
-            else {
-                // No compile or generate commands - assume it is a header file.
-                headers ~= sourceFile;
             }
 
             if (privacy == Privacy.PUBLIC) {
@@ -976,58 +863,10 @@ abstract class Binary : File {
             addSource(source, Privacy.PUBLIC);
         }
         foreach (source; protectedSources) {
-            addSource(source, Privacy.SEMI_PROTECTED);
+            addSource(source, Privacy.PROTECTED);
         }
-    }
-
-    override void includeAdded(ref Origin origin, File includer, File included) {
-        // A file we depend on (includer) has included another file (included).
-        // This might mean that this Binary requires another (this is how we find out
-        // out which libraries to link).
-        Binary *includerContainer = includer in byContent;
-        if (includerContainer && *includerContainer is this) {
-            Binary *includedContainer = included in byContent;
-            errorUnless(includedContainer !is null,
-                        origin,
-                        "included file is not contained in a library");
-            if (*includedContainer !is this && *includedContainer !in reqBinaries) {
-
-                // we require the container of the included file
-                if (g_print_deps) say("%s requires %s", this.path, includedContainer.path);
-                reqBinaries[*includedContainer] = true;
-
-                // add a reference
-                addReference(origin, *includedContainer,
-                             format(" because %s includes %s", includer.path, included.path));
-
-                // Insist that if includer is a public file in a public static lib,
-                // all its includes have to also be public files in public static libs.
-                // This is necessary because they all need to be copied into dist/include
-                // for export.
-                StaticLib slib = cast(StaticLib) *includerContainer;
-                if (slib !is null && slib.isPublic && includer in slib.publics) {
-                    StaticLib other = cast(StaticLib) *includedContainer;
-                    errorUnless(other !is null && other.isPublic && included in other.publics,
-                                origin,
-                                "Exported %s cannot include non-exported %s",
-                                includer,
-                                included);
-                }
-            }
-        }
-    }
-
-    override void systemHeaderIncluded(ref Origin origin, File includer, SysLib[] libs) {
-        // A file we depend on (includer) has included an external header (included)
-        // that isn't for one of the standard system libraries. Add the SysLib(s) to reqSysLibs.
-        Binary *container = includer in byContent;
-        if (container && *container is this) {
-            foreach (lib; libs) {
-                if (lib !in reqSysLibs) {
-                    reqSysLibs[lib] = true;
-                    if (g_print_deps) say("%s requires external lib '%s'", this, lib);
-                }
-            }
+        foreach (sysLibName; sysLibs) {
+            reqSysLibs[SysLib.get(sysLibName)] = true;
         }
     }
 }
@@ -1037,12 +876,11 @@ abstract class Binary : File {
 // StaticLib - a static library.
 //
 final class StaticLib : Binary {
-
     string uniqueName;
     bool   isPublic;
 
     this(ref Origin origin, Pkg pkg, string name_,
-         string[] publicSources, string[] protectedSources, bool isPublic_) {
+         string[] publicSources, string[] protectedSources, string[] sysLibs, bool isPublic_) {
 
         isPublic = isPublic_;
 
@@ -1063,27 +901,15 @@ final class StaticLib : Binary {
         }
 
         // Super-constructor takes care of code generation and compiling to object files.
-        super(origin, pkg, name_, _path, publicSources, protectedSources);
+        super(origin, pkg, name_, _path, publicSources, protectedSources, sysLibs);
 
-        // Decide on an action.
-        string actionName = format("%-15s %s", "StaticLib", path);
-        if (objs.length > 0) {
-          // A proper static lib with object files
-          LinkCommand *linkCommand = sourceExt in linkCommands;
-          errorUnless(linkCommand && linkCommand.staticLib.length, origin,
-                      "No link command for static lib from '%s'", sourceExt);
-          action = new Action(origin, pkg, actionName, linkCommand.staticLib, [this], objs);
+        errorUnless(objs.length > 0, origin, "A static lib must have at leasy one object file");
 
-          // Add dependencies on the headers too so that includeAdded() will be called on us
-          // for includes those headers make.
-          foreach (header; headers) {
-              action.addDependency(header);
-          }
-        }
-        else {
-          // A place-holder file to fit in with dependency tracking
-          action = new Action(origin, pkg, actionName, "DUMMY", [this], headers);
-        }
+        // Set up the library's action.
+        string  actionName = format("%-15s %s", "StaticLib", path);
+        string* command    = sourceExt in slibCommands;
+        errorUnless(command !is null, origin, "No static lib command for '%s'", sourceExt);
+        action = new Action(origin, pkg, actionName, *command, [this], objs);
 
         if (isPublic) {
             // This library's public sources are distributable, so we copy them into dist/include
@@ -1091,8 +917,7 @@ final class StaticLib : Binary {
             string copyBase = buildPath("dist", "include");
             foreach (source; publics.keys()) {
                 string destPath = prospectivePath(copyBase, this, source.name);
-                File copy = new File(origin, this, source.name ~ "-copy",
-                                     Privacy.PRIVATE, destPath, false, true);
+                File copy = new File(origin, this, source.name ~ "-copy", Privacy.PRIVATE, destPath, true);
 
                 copy.action = new Action(origin, pkg,
                                          format("%-15s %s", "Export", source.path),
@@ -1103,80 +928,88 @@ final class StaticLib : Binary {
     }
 }
 
-// Free function used by DynamicLib and Exe to determine which libraries they
-// need to link with.
+
+// Free function used by DynamicLib and Exe to finalise their actions
+// by examining the now up-to-date dependency cache information and adding
+// any found dependencies on libaries, plus the names of those libraries
+// to the action.
 //
-// target is the File that will use the libraries.
-// binaries is all the static and system libraries known to be needed from
-// source-code import/include statements.
+// objs are the object files that the target file explicitly contains. It
+// is these that we look for cached dependency information on.
 //
-// Returns the needed libraries sorted in descending number order,
-// which is the appropriate order for linking.
-void neededLibs(File             target,
-                Binary[]         binaries,
-                ref StaticLib[]  staticLibs,
-                ref DynamicLib[] dynamicLibs,
-                ref SysLib[]     sysLibs) {
+// Rules are also enforced:
+//
+// * The usual dependency rules.
+//
+// * If preventStaticLibs, StaticLibs aren't allowed as new dependencies.
+//
+bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
 
-    bool[Object] done;   // Everything already considered
+    StaticLib[]  staticLibs;
+    DynamicLib[] dynamicLibs;
+    SysLib[]     sysLibs;
+    bool[Object] done;
 
-    staticLibs  = [];
-    dynamicLibs = [];
-    sysLibs     = [];
+    void accumulate(File obj) {
+        string[] paths = File.cache.dependencies[obj.path];
+        foreach (path; paths) {
+            if (!path.isAbsolute) {
+                File file = File.byPath[path];
+                if (file !in done) {
+                    auto binary = file in Binary.byContent;
+                    errorUnless(binary !is null, file.origin,
+                                "%s depends on %s, which isn't contained by something", obj, file); 
 
-    void accumulate(Object obj) {
-        if (obj in done) return;
-        done[obj] = true;
+                    if (*binary !in done) {
+                        // Add all the binary's sysLibs
+                        foreach (lib, dummy; binary.reqSysLibs) {
+                            if (lib !in done) {
+                                sysLibs ~= lib;
+                            }
+                        }
 
-        Exe        exe  = cast(Exe)        obj;
-        StaticLib  slib = cast(StaticLib)  obj;
-        DynamicLib dlib = cast(DynamicLib) obj;
-        SysLib     sys  = cast(SysLib)     obj;
+                        if (*binary !is target) {
+                            // Must be a StaticLib
+                            auto slib = cast(StaticLib*) binary;
+                            errorUnless(slib !is null, binary.origin, "Expected %s to be a StaticLib", binary);
 
-        if (exe !is null) {
-            foreach (other; exe.reqBinaries.keys) {
-                accumulate(other);
-            }
-            foreach (other; exe.reqSysLibs.keys) {
-                accumulate(other);
-            }
-        }
-        else if (slib !is null) {
-            foreach (other; slib.reqBinaries.keys) {
-                accumulate(other);
-            }
-            foreach (other; slib.reqSysLibs.keys) {
-                accumulate(other);
-            }
-            DynamicLib* dynamic = slib in DynamicLib.byContent;
-            if (dynamic is null || dynamic.number > target.number) {
-                if (slib.objs.length > 0) {
-                    staticLibs ~= slib;
+                            // Add this slib, or the dynamic lib that contains it
+                            auto dlib = *slib in DynamicLib.byContent;
+                            if (dlib is null || dlib.number > target.number) {
+                                if (slib.objs.length > 0) {
+                                    errorUnless(!preventStaticLibs, target.origin,
+                                                "%s cannot link with static lib %s", target, *slib);
+                                    target.action.addDependency(*slib);
+                                    staticLibs ~= *slib;
+                                }
+                            }
+                            else if (*dlib !in done && *dlib !is target) {
+                                target.action.addDependency(*dlib);
+                                dynamicLibs ~= *dlib;
+                            }
+                        }
+                    }
                 }
             }
-            else if (*dynamic !is target) {
-                accumulate(*dynamic);
-            }
-        }
-        else if (dlib !is null) {
-            dynamicLibs ~= dlib;
-        }
-        else if (sys !is null) {
-            sysLibs ~= sys;
-        }
-        else {
-            fatal("logic error");
         }
     }
 
-    foreach (obj; binaries) {
+    foreach (obj; objs) {
         accumulate(obj);
     }
     staticLibs.sort();
     dynamicLibs.sort();
     sysLibs.sort();
 
-    //say("%s required libs %s,%s,%s", target, staticLibs, dynamicLibs, sysLibs);
+    string[] libs;
+    foreach (lib; staticLibs)  libs ~= lib.uniqueName;
+    foreach (lib; dynamicLibs) libs ~= lib.uniqueName;
+    foreach (lib; sysLibs)     libs ~= lib.name;
+
+    if (g_print_details) say("%s libs = %s", target, libs);
+    target.action.setLibs(libs);
+
+    return staticLibs.length + dynamicLibs.length > 0;
 }
 
 
@@ -1209,7 +1042,7 @@ final class DynamicLib : File {
             _path = _path.setExtension(".dll");
         }
 
-        super(origin, pkg, name_ ~ "-dynamic", Privacy.PUBLIC, _path, false, true);
+        super(origin, pkg, name_ ~ "-dynamic", Privacy.PUBLIC, _path, true);
 
         foreach (trail; staticTrails) {
             string trail1 = buildPath(pkg.trail, trail, baseName(trail));
@@ -1227,7 +1060,7 @@ final class DynamicLib : File {
             errorUnless(*staticLib !in byContent, origin,
                         "static lib %s already used by dynamic lib %s",
                         *staticLib, byContent[*staticLib]);
-            addReference(origin, *staticLib);
+            checkCanDepend(*staticLib);
             staticLibs ~= *staticLib;
             byContent[*staticLib] = this;
 
@@ -1237,52 +1070,23 @@ final class DynamicLib : File {
 
         // action
         string actionName = format("%-15s %s", "DynamicLib", path);
-        LinkCommand *linkCommand = sourceExt in linkCommands;
-        errorUnless(linkCommand !is null && linkCommand.dynamicLib != null, origin,
-                    "No link command for %s -> .dlib", sourceExt);
+        string *command = sourceExt in dlibCommands;
+        errorUnless(command !is null, origin, "No link command for %s -> .dlib", sourceExt);
         File[] objs;
         foreach (staticLib; staticLibs) {
             foreach (obj; staticLib.objs) {
                 objs ~= obj;
             }
         }
-        action = new Action(origin, pkg, actionName, linkCommand.dynamicLib, [this], objs);
+        action = new Action(origin, pkg, actionName, *command, [this], objs);
     }
 
-
-    // Called just before our action is issued.
-    // Verify that all the StaticLibs we now know that we depend on are contained by this or
-    // another earlier-defined-than-this DynamicLib.
-    // Add any required SysLibs to our action.
     override bool augmentAction() {
-        StaticLib[]  neededStaticLibs;
-        DynamicLib[] neededDynamicLibs;
-        SysLib[]     neededSysLibs;
-
-        neededLibs(this, cast(Binary[]) staticLibs,
-                   neededStaticLibs, neededDynamicLibs, neededSysLibs);
-
-        string[] libs;
-        bool added;
-
-        if (neededStaticLibs !is null) {
-            fatal("Dynamic lib %s cannot require static libs, but requires %s",
-                  path, neededStaticLibs);
+        File[] objs;
+        foreach (slib; staticLibs) {
+            objs ~= slib.objs;
         }
-        foreach (lib; neededDynamicLibs) {
-            if (lib !is this) {
-                if (action.addDependency(lib)) added = true;
-                libs ~= lib.uniqueName;
-            }
-        }
-        foreach (lib; neededSysLibs) {
-            libs ~= lib.name;
-        }
-        if (!added) {
-            action.finaliseCommand(libs);
-        }
-
-        return added;
+        return binaryAugmentAction(this, objs, true);
     }
 }
 
@@ -1296,7 +1100,7 @@ final class Exe : Binary {
     // that contain any included header files, and any required system libraries.
     // Note that any system libraries required by inferred local libraries are
     // automatically linked to.
-    this(ref Origin origin, Pkg pkg, string kind, string name_, string[] sourceNames) {
+    this(ref Origin origin, Pkg pkg, string kind, string name_, string[] sourceNames, string[] sysLibs) {
         string destination() {
             switch (kind) {
             case "dist-exe": return buildPath("dist", "bin", name_);
@@ -1314,18 +1118,15 @@ final class Exe : Binary {
             }
         }
 
-        super(origin, pkg, name_ ~ "-exe", destination(), sourceNames, []);
+        super(origin, pkg, name_ ~ "-exe", destination(), sourceNames, [], sysLibs);
 
-        LinkCommand *linkCommand = sourceExt in linkCommands;
-        errorUnless(linkCommand && linkCommand.executable != null, origin,
-                    "No command to link and executable from sources of extension %s", sourceExt);
+        string *command = sourceExt in exeCommands;
+        errorUnless(command !is null, origin, "No command to link exe from %s", sourceExt);
 
-        action = new Action(origin, pkg, format("%-15s %s", description(), path),
-                            linkCommand.executable, [this], objs);
+        action = new Action(origin, pkg, format("%-15s %s", description(), path), *command, [this], objs);
 
         if (kind == "test-exe") {
-            File result = new File(origin, pkg, name ~ "-result",
-                                   Privacy.PRIVATE, path ~ "-passed", false, true);
+            File result = new File(origin, pkg, name ~ "-result", Privacy.PRIVATE, path ~ "-passed", true);
             result.action = new Action(origin,
                                        pkg,
                                        format("%-15s %s", "TestResult", result.path),
@@ -1335,34 +1136,8 @@ final class Exe : Binary {
         }
     }
 
-    // Called just before our action is issued - augment the action's command string
-    // with the library dependencies that we should now know about via includeAdded().
-    // Return true if dependencies were added.
     override bool augmentAction() {
-        StaticLib[]  neededStaticLibs;
-        DynamicLib[] neededDynamicLibs;
-        SysLib[]     neededSysLibs;
-
-        neededLibs(this, [this], neededStaticLibs, neededDynamicLibs, neededSysLibs);
-
-        string[] libs;
-        bool added;
-
-        foreach (lib; neededStaticLibs) {
-            if (action.addDependency(lib)) added = true;
-            libs ~= lib.uniqueName;
-        }
-        foreach (lib; neededDynamicLibs) {
-            if (action.addDependency(lib)) added = true;
-            libs ~= lib.uniqueName;
-        }
-        foreach (lib; neededSysLibs) {
-            libs ~= lib.name;
-        }
-        if (!added) {
-            action.finaliseCommand(libs);
-        }
-        return added;
+        return binaryAugmentAction(this, objs, false);
     }
 }
 
@@ -1388,7 +1163,7 @@ void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) 
         // Create the source file
         string ext        = extension(name);
         string relName    = buildPath(dir, name);
-        File   sourceFile = File.addSource(origin, pkg, relName, Privacy.PUBLIC, false);
+        File   sourceFile = File.addSource(origin, pkg, relName, Privacy.PUBLIC);
 
         // Decide on the destination directory.
         string destDir = dest.length == 0 ?
@@ -1399,7 +1174,7 @@ void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) 
         if (generate is null) {
             // Target is a simple copy of source file, preserving execute permission.
             File destFile = new File(origin, pkg, relName ~ "-copy", Privacy.PUBLIC,
-                                     buildPath(destDir, name), false, true);
+                                     buildPath(destDir, name), true);
             destFile.action = new Action(origin,
                                          pkg,
                                          format("%-15s %s", "Copy", destFile.path),
@@ -1414,19 +1189,19 @@ void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) 
             foreach (suffix; generate.suffixes) {
                 string destName = stripExtension(name) ~ suffix;
                 File gen = new File(origin, pkg, destName, Privacy.PRIVATE,
-                                    buildPath(destDir, destName), false, true);
+                                    buildPath(destDir, destName), true);
                 files    ~= gen;
                 suffixes ~= suffix ~ " ";
             }
             errorUnless(files.length > 0, origin, "Must have at least one destination suffix");
-            Action action = new Action(origin,
-                                       pkg,
-                                       format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
-                                       generate.command,
-                                       files,
-                                       [sourceFile]);
+            Action genAction = new Action(origin,
+                                          pkg,
+                                          format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
+                                          generate.command,
+                                          files,
+                                          [sourceFile]);
             foreach (gen; files) {
-                gen.action = action;
+                gen.action = genAction;
             }
         }
     }
@@ -1449,36 +1224,9 @@ void processBubfile(string indent, Pkg pkg) {
 
             case "contain":
                 foreach (name; statement.targets) {
-                    errorUnless(dirName(name) == ".", statement.origin,
-                                "Contained packages have to be relative");
                     Privacy privacy = privacyOf(statement.origin, statement.arg1);
                     Pkg newPkg = new Pkg(statement.origin, pkg, name, privacy);
                     processBubfile(indent, newPkg);
-                }
-            break;
-
-            case "refer":
-                foreach (trail; statement.targets) {
-                    Pkg* other = cast(Pkg*) (trail in Node.byTrail);
-                    if (other is null) {
-                        // create the referenced package which must be top-level, then refer to it
-                        errorUnless(dirName(trail) == ".",
-                                    statement.origin,
-                                    "Previously-unknown referenced package %s has to be top-level",
-                                    trail);
-                        Pkg newPkg = new Pkg(statement.origin,
-                                             Node.byTrail["root"],
-                                             trail,
-                                             Privacy.PUBLIC);
-                        processBubfile(indent, newPkg);
-                        pkg.addReference(statement.origin, newPkg);
-                    }
-                    else {
-                        // refer to the existing package
-                        errorUnless(other !is null, statement.origin,
-                                    "Cannot refer to unknown pkg %s", trail);
-                        pkg.addReference(statement.origin, *other);
-                    }
                 }
             break;
 
@@ -1492,6 +1240,7 @@ void processBubfile(string indent, Pkg pkg) {
                                               statement.targets[0],
                                               statement.arg1,
                                               statement.arg2,
+                                              statement.arg3,
                                               statement.rule == "public-lib");
             }
             break;
@@ -1518,7 +1267,8 @@ void processBubfile(string indent, Pkg pkg) {
                                   pkg,
                                   statement.rule,
                                   statement.targets[0],
-                                  statement.arg1);
+                                  statement.arg1,
+                                  statement.arg2);
             }
             break;
 
@@ -1548,11 +1298,9 @@ void processBubfile(string indent, Pkg pkg) {
 //
 void cleandirs() {
     void cleanDir(string name) {
-        //say("cleaning dir %s, cdw=%s", name, getcwd);
         if (exists(name) && isDir(name)) {
             bool[string] dirs;
             foreach (DirEntry entry; dirEntries(name, SpanMode.depth, false)) {
-                //say("  considering %s", entry.name);
                 bool isDir = attrIsDir(entry.linkAttributes);
 
                 if (!isDir) {
@@ -1568,11 +1316,9 @@ void cleandirs() {
                 }
                 else {
                     if (entry.name !in dirs) {
-                        //say("removing empty dir %s", entry.name);
                         rmdir(entry.name);
                     }
                     else {
-                        //say("  keeping non-empty dir %s", entry.name);
                         dirs[entry.name.dirName()] = true;
                     }
                 }
@@ -1608,25 +1354,24 @@ bool doPlanning(uint                 numWorkers,
     g_print_deps    = printDeps;
     g_print_details = printDetails;
 
-    string projectPackage = getOption("PROJECT");
-    errorUnless(projectPackage.length > 0, Origin(), "No project directory specified");
+    // Load the dependency cache
+    File.cache = new DependencyCache();
 
     int needed;
     try {
-        // read the project Bubfile and descend into all those it refers to
-        auto root = new Node();
-        auto project = new Pkg(Origin(), root, projectPackage, Privacy.PRIVATE);
+        // Read the project Bubfile
+        auto project = new Pkg(Origin(), null, "", Privacy.PRIVATE);
         processBubfile("", project);
 
         // clean out unwanted files from the build dir
         cleandirs();
 
         // Now that we know about all the files and have the mostly-complete
-        // dependency graph (just includes to go), touch all source files, which is
-        // enough to trigger building everything.
+        // dependency graph (just what libraries to link still uncertain), issue
+        // all the actions we can, which is enough to trigger building everything.
         foreach (path, file; File.byPath) {
-            if (!file.built) {
-                file.touch();
+            if (file.built) {
+                file.issueIfReady();
             }
         }
 
@@ -1650,7 +1395,10 @@ bool doPlanning(uint                 numWorkers,
             }
 
             if (!inflight) {
-                fatal("Nothing to do and no inflight actions - something is wrong");
+                say("Outstanding=%s", File.outstanding.keys());
+                fatal("Nothing to do with %s outstanding and no inflight actions - "
+                      "something is wrong",
+                      File.outstanding.length);
             }
 
             // Wait for a worker to report back.
@@ -1659,8 +1407,12 @@ bool doPlanning(uint                 numWorkers,
                 case PlannerProtocol.Type.Success:
                 {
                     --inflight;
+                    string[] inputs;
+                    foreach (file; Action.byName[msg.success.action].inputs) {
+                        inputs ~= file.path;
+                    }
                     foreach (file; Action.byName[msg.success.action].builds) {
-                        file.updated();
+                        file.updated(inputs);
                     }
                     break;
                 }
@@ -1675,7 +1427,11 @@ bool doPlanning(uint                 numWorkers,
     catch (BailException ex) {}
     catch (Exception ex) { say("Unexpected exception %s", ex); }
 
+    // Flush the dependency cache so we lock in any progress made
+    File.cache.flush();
+
     if (!File.outstanding.length) {
+
         // Print some statistics and report success.
         say("\n"
             "Total number of files:             %s\n"
@@ -1688,6 +1444,3 @@ bool doPlanning(uint                 numWorkers,
     // Report failure.
     return false;
 }
-
-
-

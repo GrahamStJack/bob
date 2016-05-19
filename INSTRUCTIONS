@@ -74,8 +74,8 @@ The first was the need to generate source code from things like IDL files.
 This is trickier than it appears, because the normal practice of scanning
 source files for includes at the start of the build doesn't work for generated
 code, which might not even exist at that time. Bub supports code generation,
-and importantly defers scanning a source file for includes until AFTER it is
-up to date.
+and importantly defers building a file until all of the generated source files
+it could depend on are up to date.
 
 The second problem was that manually keeping track of which libraries to link
 with rapidly becomes untenable as the project grows. The usual approach of
@@ -85,10 +85,8 @@ central purpose by having executables that depend on everything. Bub deals
 with this as follows:
 * When specifying libraries, the public and private header files of that
   library are declared.
-* Including a public header from a library establishes a dependency on that
-  library.
-* System libraries are also specified, allowing dependencies on them to
-  be determined via includes too.
+* An object file dependency on a public header from a library establishes
+  a dependency on that library.
 This approach results in a massive simplification in maintenance of a
 project's build system, and also provides bub with the information it needs
 to enforce dependency rules without relying on the compiler to do it via
@@ -126,19 +124,17 @@ The bub-config utility establishes a build directory, from which bub can build
 your project. bub-config requires a configuration file that defines a number of
 variables - see example/bub.cfg for a fully documented example.
 
-The configured variables ultimately specify:
+The configured variables ultimately specify the commands used to build files.
+These commands can also write dependencies to a deps file, and this information is
+used later to decide if the built file needs to be rebuilt, and aso to determine
+what in-project libraries to link with.
 
-* The commands used to build files.
-
-* The external libraries used by the project and the imports/includes
-  that indicate a need to link with those libraries.
-
-The build directory you specify must be outside the source-code repositories,
+The build directory you specify should be outside the source-code repositories,
 avoiding pollution of your repositories with build artifacts, and allowing
-multiple build directories to be using the same source checkout. For example,
+multiple build directories to be using the same source. For example,
 your repository might be in ~/source/myproject, and you might have build
-directories ~/builds/myproject/debug, ~/builds/myproject/profile,
-~/builds/myproject/release.
+directories ~/build/myproject/debug, ~/build/myproject/profile,
+~/build/myproject/release.
 
 The build directory has links back to the source.
 
@@ -151,13 +147,10 @@ repo-root
     bub.cfg
     assorted-source-dirs
 
-One of the source-dirs is specified in the PROJECT variable as containing
-the top level Bubfile.
-
 To configure a build directory from a repo that looks like the above:
 
 cd repo-root/source-root
-bub-config --mode=debug ~/builds/myproject/debug
+bub-config --mode=debug ~/build/myproject/debug
 
 
 The build directory contains:
@@ -176,10 +169,10 @@ priv
   dirs-matching-source-dir-tree
     private-finished-build-artifacts
 dist
-  lib       - Contains public static libraries and all dynamic libraries.
-  bin       - Contains executables and scripts.
-  data      - Contains data files.
-  include   - contains public include files for public static libraries.
+  lib  - Contains public static libraries and all dynamic libraries.
+  bin  - Contains executables and scripts.
+  data - Contains data files.
+  src  - contains public source files from public static libraries.
 
 
 Building
@@ -197,9 +190,9 @@ target to specify on the command-line. This isn't a problem because:
 The "mostly" above refers to the jitter in build order that occurs when building
 with multiple cores.
 
-The build process is controlled by Bubfiles. The top-level source directory
-(specified in the config file) contains the top-level Bubfile, and it brings in
-other directories with its statements.
+The build process is controlled by Bubfiles. The top-level Bubfile is generated,
+and has a "contain" rule that brings in all the top level packages specified in
+the config file.
 
 Refer to the example's Bubfiles.
 
@@ -210,28 +203,9 @@ Bubfile syntax is:
 
 where a parameter is a space-separated list of tokens.
 
-Statements often refer to files and directories.
-The rules for determining the paths referred to are:
-
-* Source files are either src/trail/name or obj/trail/name, where
-  trail in the sequence of directory names leading to the Bubfile,
-  and name is the name specified in the Bubfile statement.
-
-  Example: if a Bubfile in tools/hammer has a library that contains source
-  file claw.h, it is looked for in src/tools/hammer/claw.h and
-  obj/tools/hammer/claw.h. It is an error for the file to be in both
-  locations.
-
-* Directories can be "beneath" the current directory. For example, if a
-  Bubfile in tools has a "contain claw;" statement, the trail of the contained
-  directory is tools/hammer.
-
-* Directories can also be specified from the root. For example,
-  "handyman: may have a "refer tools;" statement to refer to top-level directory
-  "tools".
-
 
 Statement types are:
+
 
 Contain
 -------
@@ -245,23 +219,24 @@ the build. Visibility defaults to public. Contained directories must be
 specified in dependency order (lowest level first).
 
 
-Refer
------
-
-refer paths-from-source-root;
-
-eg: refer framework alg/math;
-
-Specifies that this directory has access to the listed directories.
-
-
 Static Lib
 ----------
 
-static-lib lib-name : public-source [: protected-source];
-public-lib lib-name : public-source [: protected-source];
+static-lib lib-name : public-source : protected-source [: required-sys-libs];
+public-lib lib-name : public-source : protected-source [: required-sys-libs];
 
-eg: static-lib math : matrix.h alg.h : matrix.cpp alg.cpp;
+eg: static-lib math : matrix.h alg.h : matrix.cpp alg.cpp : m;
+
+The order of the listed files should be in dependency order, but that is only
+required if some of the library's source files are generated within the library.
+
+A static lib has to contain at least one object file generated from the listed
+source files.
+
+The sys-libs should be listed in dependency order (lowest level first).
+Only sys-libs not already pulled in by other dependencies need by listed.
+For example, some higher-level library that depends on math doesn't need to
+specify that it requires sys-lib m.
 
 Specifies a static library. All the source files should be in the same language,
 or in a language from which the library's language files can be generated.
@@ -273,7 +248,7 @@ The public files are those that client code can import/include.
 
 public-lib is identical to static-lib except that:
 
-* The public include files are copied into dist/include/<trail>
+* The public source files are copied into dist/src/<trail>
 
 * If the library is not contained in a dynamic library, the library file is
   copied into dist/lib.
@@ -290,10 +265,12 @@ Dynamic libs contain all the object files contained in the specified static libs
 Executables defined after a dynamic library will link to the dynamic library
 rather than the static library.
 
+The order of the specified static libs is unimportant.
+
 The contained static-libs all have to be declared in the current Bubfile
 or in a transitively contained directory's Bubfile.
 The last path element can optionally be omitted if it is the same as the
-containing directory name, which is usually the case.
+containing directory name, which is often the case.
 
 For example, if the directory structure is:
   one - defines dynamic library "one"
@@ -307,16 +284,21 @@ or, if you want to do it in full, which you must if the names don't match:
 
 dynamic-lib one : two/two three/three;
 
+Note that a directory can contain any number of static and dynamic directories.
+
 
 Executable
 ----------
 
-dist-exe exe-name : source;
-test-exe exe-name : source;
-priv-exe exe-name : source;
+dist-exe exe-name : source [: required-sys-libs];
+test-exe exe-name : source [: required-sys-libs];
+priv-exe exe-name : source [: required-sys-libs];
 
 eg: test-exe math-test : math_test.cpp;
 
+As with static libraries, only sys-libs not already pulled in by other
+dependencies need by listed. Any that are present should be in dependency
+order (lowest level first).
 
 dist-exe places the built executable in the dist/bin directory.
 
@@ -327,7 +309,7 @@ and executes the test when its result file is out of date.
 
 The test is run with a command-line argument --tmp=<path>, where
 <path> is a temporary directory that the test can use for scratch files
-if necessary.
+if necessary. The temporary directory is deleted if the test passes.
 
 
 Scripts, data and docs
@@ -348,6 +330,9 @@ misc foo.sh foo2.sh : dist/bin;
 # into priv/<chain>/doc, preserving any subdirectory structure.
 misc index.rst doc;
 
+Source files can be generated this way too, but they are usually generated
+via a static-lib statement.
+
 
 Dependencies
 ============
@@ -357,32 +342,38 @@ Discussion
 
 Dependencies are a major preoccupation of bub. This is because on large
 projects, management of dependencies is essential, and the best way to manage
-something is with a tool. If you can't build software without explicitly
-declaring a dependency, you can't sneak a dependency in while no-one is looking.
-
-Bub also goes further and insists on no circularities between files or directories.
-This may seem like a harsh constraint, but it is a very useful design tool, and
-in the experience of the writer, leads to better, more maintainable designs.
+something is with a tool. If you can't build software that breaks the rules,
+you can't sneak an invalid dependency in while no-one is looking.
 
 
 Rules
 -----
 
-Files and their owning directories are arranged in a tree with cross-linked
-references. Each node in the tree can be public or protected. The root of the
-tree contains its children publicly.
+Dependencies are deduced from information in generated dependency files via
+using ${DEPS} in commands, and also from containment/dependency information
+in Bubfiles.
 
-The reference rules are:
+File A is allowed to depend on file B if all of the following are true:
 
-* A node implicitly refers to its children.
+* A is defined later than B, or B is a descendant of A.
 
-* A protected node can only be referred to by sibling nodes or nodes transitively
-  contained by those siblings.
+* A's package is not a descendant of B's package (both in the same package is ok).  
 
-* Node (A) can only refer to another node (B) if A's parent transitively refers
-  to node B.
+* B is visible.
 
-* Circular references are not allowed.
+
+Visibility works like this:
+
+* The protected source files in a static lib can only be depended on by that
+  static lib's object files.
+
+* All of the source files in an exe can only be depended on by that exe's
+  object files.
+
+* Packages can be public or protected. Files that are descendants of
+  protected package A are only visible to files that are descendants of
+  A's parent package.
+
 
 An object file can only be used once - either in a library or an executable.
 Dynamic libraries don't count as a use - they are just a repackaging.

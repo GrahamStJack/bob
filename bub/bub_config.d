@@ -68,7 +68,6 @@ version(Posix) {
     string CLEAN_TEXT = "rm -rf dist priv obj tmp\n";
 }
 version(Windows) {
-
     // Set the mode of a file
     private void setMode(string path, bool executable) {
         // Setting a file executable is all about the extension in windows,
@@ -105,7 +104,7 @@ alias string[][string] Vars;
 //
 // Enum to control how to append to variables
 //
-enum AppendType { notExist, mustExist, mayExist}
+enum AppendType { notExist, mustExist }
 
 
 //
@@ -120,7 +119,6 @@ private void append(ref Vars vars, string name, string[] extra, AppendType appen
     case AppendType.mustExist:
         assert(name in vars, format("Cannot add to non-existant variable '%s'", name));
         break;
-    case AppendType.mayExist:
     }
 
     if (name !in vars) {
@@ -281,91 +279,34 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     }
     mkdir(localSrcPath);
 
-    // Make a symbolic link to each top-level package in this and other specified repos.
-    // Note - a package is a dir in a refer statement in a top-level Bubfile, starting
-    // from the project package.
+    // Make a symbolic link to each top-level package specified in CONTAIN, and looked
+    // for in all of ROOTS - then write the project Bubfile.
 
-    assert("PROJECT" in vars && vars["PROJECT"].length, "PROJECT variable is not set");
-    string project = vars["PROJECT"][0];
-    string[] repoPaths = [srcDir];
-    if ("REPOS" in vars) {
-        foreach (path; vars["REPOS"]) {
-            repoPaths ~= buildPath(srcDir, path);
-        }
-    }
+    assert("ROOTS"   in vars && vars["ROOTS"].length,   "ROOTS variable is not set");
+    assert("CONTAIN" in vars && vars["CONTAIN"].length, "CONTAIN variable is not set");
 
     string[string] pkgPaths;
 
-    // Local function to get and check references from a dir's Bubfile
-    // to top-level packages.
-    void getReferences(string path) {
-        if (!exists(path) || !isDir(path)) {
-            writefln("No directory at %s", path);
-            exit(1);
-        }
-        string bubfile = buildPath(path, "Bubfile");
-        if (!exists(bubfile)) {
-            writefln("Cannot find Bubfile in %s", path);
-            exit(1);
-        }
-        string[] lines = splitLines(readText(bubfile));
-        bool inRefer;
-        foreach(line; lines) {
-            string[] tokens = split(line);
-            if (tokens.length > 0 && tokens[0] == "refer") {
-                inRefer = true;
-                tokens = tokens[1..$];
+    string contain;
+    foreach (name; vars["CONTAIN"]) {
+        contain ~= " " ~ name;
+        string pkgPath;
+        foreach (dir; vars["ROOTS"]) {
+            auto candidate = buildPath(dir, name);
+            if (candidate.exists) {
+                assert(pkgPath is null, format("%s found in both %s and %s", name, pkgPath, candidate));
             }
-            if (inRefer) {
-                foreach (token; tokens) {
-                    if (token[$-1] == ';') {
-                        inRefer = false;
-                        token = token[0..$-1];
-                    }
-
-                    if (token.length > 0) {
-                        string pkgName = token;
-                        if (baseName(pkgName) == pkgName && pkgName !in pkgPaths) {
-                            string pkgPath;
-                            foreach (dir; repoPaths) {
-                              string tryPath = buildPath(dir, pkgName);
-                              if (isDir(tryPath)) {
-                                  if (pkgPath == null) {
-                                    pkgPath = tryPath;
-                                  }
-                                  else {
-                                      writefln("Found top-level package %s in both %s and %s",
-                                               pkgName, pkgPath, tryPath);
-                                      exit(1);
-                                  }
-                              }
-                            }
-                            if (pkgPath is null) {
-                                writefln("Could not find top-level package %s referenced from %s",
-                                         pkgName, bubfile);
-                                exit(1);
-                            }
-                            else {
-                                writefln("Found top-level package %s in %s", pkgName, pkgPath);
-                                pkgPaths[pkgName] = pkgPath;
-                                getReferences(pkgPath);
-                            }
-                        }
-                    }
-
-                    if (!inRefer) break;
-                }
-            }
+            pkgPath = candidate;
         }
+        assert(pkgPath !is null, format("Could not find %s in any of %s", name, vars["ROOTS"]));
+        pkgPaths[name] = pkgPath;
     }
 
-    string projectPath = buildPath(srcDir, project);
-    pkgPaths[project] = projectPath;
-    getReferences(projectPath);
-
-    foreach (name; pkgPaths.keys.sort()) {
-        makeSymlink(pkgPaths[name], buildPath(localSrcPath, name));
+    foreach (name, path; pkgPaths) {
+        makeSymlink(buildPath(srcDir, path), buildPath(localSrcPath, path));
     }
+
+    update(buildPath(localSrcPath, "Bubfile"), "contain" ~ contain ~ ";", false);
 
     // print success
     writefln("Build environment in %s is ready to roll.", buildDir);
@@ -377,7 +318,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 //
 Vars parseConfig(string configFile, string mode) {
 
-    enum Section { none, defines, modes, syslibs }
+    enum Section { none, defines, modes }
 
     Section section = Section.none;
     bool    inMode;
@@ -433,16 +374,6 @@ Vars parseConfig(string configFile, string mode) {
                     if (tokens.length == 2) {
                         vars.append(strip(tokens[0]), split(tokens[1]), AppendType.mustExist);
                     }
-                }
-            }
-
-            else if (section == Section.syslibs) {
-                string[] tokens = split(line, " =");
-                if (tokens.length == 2) {
-                    // Define a new variable.
-                    vars.append(format("syslib%02d %s", ++syslibNum, strip(tokens[0])),
-                                split(tokens[1]),
-                                AppendType.notExist);
                 }
             }
         }

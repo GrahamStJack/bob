@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2013, Graham St Jack.
+ * Copyright 2012-2016, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -29,6 +29,8 @@ import std.ascii;
 import std.file;
 import std.path;
 import std.string;
+import std.process;
+import std.algorithm;
 
 static import std.array;
 
@@ -40,85 +42,22 @@ static import std.array;
 // General variables
 string[string] options;
 
-// Commmands to compile a source file into an object file
-struct CompileCommand {
-    string   command;
-}
-CompileCommand[string] compileCommands; // keyed on input extension
+// Build options
+string[string] compileCommands; // Compile command by input extension
+string[string] slibCommands;    // Static lib command by source extension
+string[string] dlibCommands;    // Dynamic lib command by source extension
+string[string] exeCommands;     // Exe command by source extension
 
 // Commands to generate files other than reserved extensions
 struct GenerateCommand {
     string[] suffixes;
     string   command;
 }
-GenerateCommand[string] generateCommands; // keyed on input extension
-
-// Commands that work with object files
-struct LinkCommand {
-    string staticLib;
-    string dynamicLib;
-    string executable;
-}
-LinkCommand[string] linkCommands; // keyed on source extension
+GenerateCommand[string] generateCommands; // Gernerate command by input extension
 
 bool[string] reservedExts;
 static this() {
     reservedExts = [".obj":true, ".slib":true, ".dlib":true, ".exe":true];
-}
-
-
-//
-// SysLib - represents a library outside the project.
-//
-// It is automatically required by an in-project shared library or exe
-// if any of its outside-the-project headers are imported/included.
-//
-final class SysLib {
-    static SysLib[string]   byName;
-    static SysLib[][string] byHeader;
-    static int              nextNumber;
-
-    string name;
-    int    number;
-
-    static create(string[] libNames, string[] headers) {
-        SysLib[] libs;
-        foreach (name; libNames) {
-            libs ~= new SysLib(name);
-        }
-        foreach (header; headers) {
-            if (header in byHeader) {
-                fatal("System header %s used in multiple syslib variables", header);
-            }
-            byHeader[header] = libs;
-        }
-    }
-
-    private this(string name_) {
-        name         = name_;
-        number       = nextNumber++;
-        byName[name] = this;
-    }
-
-    override string toString() const {
-        return name;
-    }
-
-    override int opCmp(Object o) const {
-        // reverse order
-        if (this is o) return 0;
-        SysLib a = cast(SysLib)o;
-        if (a is null) return  -1;
-        return a.number - number;
-    }
-
-    override bool opEquals(Object o) {
-        return this is o;
-    }
-
-    override nothrow @trusted size_t toHash() {
-      return number;
-    }
 }
 
 
@@ -153,23 +92,22 @@ void readOptions() {
                 errorUnless(input !in reservedExts, origin,
                             "Cannot use %s as source ext in commands", input);
 
-                if (outputs.length == 1 && (outputs[0] == ".slib" ||
-                                            outputs[0] == ".dlib" ||
-                                            outputs[0] == ".exe")) {
-                    // A link command
-                    if (input !in linkCommands) {
-                        linkCommands[input] = LinkCommand("", "", "");
-                    }
-                    LinkCommand *linkCommand = input in linkCommands;
-                    if (outputs[0] == ".slib") linkCommand.staticLib  = value;
-                    if (outputs[0] == ".dlib") linkCommand.dynamicLib = value;
-                    if (outputs[0] == ".exe")  linkCommand.executable = value;
-                }
-                else if (outputs.length == 1 && outputs[0] == ".obj") {
-                    // A compile command
+                if (outputs.length == 1 && outputs[0] == ".obj") {
                     errorUnless(input !in compileCommands && input !in generateCommands,
                                 origin, "Multiple compile/generate commands using %s", input);
-                    compileCommands[input] = CompileCommand(value);
+                    compileCommands[input] = value;
+                }
+                else if (outputs.length == 1 && outputs[0] == ".slib") {
+                    errorUnless(input !in slibCommands, origin, "Multiple .slib commands using %s", input);
+                    slibCommands[input] = value;
+                }
+                else if (outputs.length == 1 && outputs[0] == ".dlib") {
+                    errorUnless(input !in dlibCommands, origin, "Multiple .dlib commands using %s", input);
+                    dlibCommands[input] = value;
+                }
+                else if (outputs.length == 1 && outputs[0] == ".exe") {
+                    errorUnless(input !in exeCommands, origin, "Multiple .exe commands using %s", input);
+                    exeCommands[input] = value;
                 }
                 else {
                     // A generate command
@@ -182,10 +120,6 @@ void readOptions() {
                     generateCommands[input] = GenerateCommand(outputs, value);
                 }
             }
-            else if (key.length > 6 && key[0 .. 6] == "syslib") {
-                // syslib declaration
-                SysLib.create(split(key[9 .. $]), split(value));
-            }
             else {
                 // A variable
                 options[key] = value;
@@ -195,8 +129,14 @@ void readOptions() {
             fatal("Invalid Buboptions line: %s", line);
         }
     }
+
+    // Hard-coded options
+    options["PROJ_INC"] = "src obj";
+    options["PROJ_LIB"] = buildPath("dist", "lib") ~ " obj";
 }
 
+
+// Return the specified option, or an empty string if it isn't present.
 string getOption(string key) {
     auto value = key in options;
     if (value) {
@@ -209,201 +149,160 @@ string getOption(string key) {
 
 
 //
-// Scan file for includes, returning an array of included trails
-//   #   include   "trail"
+// Return a fully resolved command by transitively replacing its ${<option>} tokens
+// with tokens from options, extras or environment, cross-multiplying with adjacent text.
 //
-// All of the files found should have trails relative to "src" (if source)
-// or "obj" (if generated). All system includes must use angle-brackets,
-// and are not returned from a scan.
-//
-struct Include {
-    string trail;
-    uint   line;
-    bool   quoted;
-}
+string resolveCommand(string command, string[string] extras) {
+    //say("resolving command %s with extras=%s", command, extras);
 
-Include[] scanForIncludes(string path) {
-    Include[] result;
-    Origin origin = Origin(path, 1);
+    // Local function to expand variables in a string.
+    string resolve(string text) {
+        string result;
 
-    enum Phase { START, HASH, WORD, INCLUDE, QUOTE, ANGLE, NEXT }
+        bool   inToken, inCurly;
+        size_t anchor;
+        char   prev;
+        string prefix, varname, suffix;
 
-    if (exists(path) && isFile(path)) {
-        string content = readText(path);
-        int anchor = 0;
-        Phase phase = Phase.START;
+        // Local function to finish processing a token.
+        void finishToken(size_t pos) {
+            suffix = text[anchor .. pos];
+            size_t start = result.length;
 
-        foreach (int i, char ch; content) {
-            if (ch == '\n') {
-                phase = Phase.START;
-                ++origin.line;
-            }
-            else {
-                switch (phase) {
-                case Phase.START:
-                    if (ch == '#') {
-                        phase = Phase.HASH;
+            string[] values;
+            if (varname.length) {
+                auto option = varname in options;
+                if (option is null) {
+                    option = varname in extras;
+                }
+                if (option !is null) {
+                    values = split(resolve(*option));
+                }
+                else {
+                    try {
+                        string env = environment[varname];
+                        values = split(resolve(env));
                     }
-                    else if (!isWhite(ch)) {
-                        phase = Phase.NEXT;
+                    catch (Exception ex) {
+                        values = [];
                     }
-                    break;
-                case Phase.HASH:
-                    if (!isWhite(ch)) {
-                        phase = Phase.WORD;
-                        anchor = i;
-                    }
-                    break;
-                case Phase.WORD:
-                    if (isWhite(ch)) {
-                        if (content[anchor .. i] == "include") {
-                            phase = Phase.INCLUDE;
-                        }
-                        else {
-                            phase = Phase.NEXT;
-                        }
-                    }
-                    break;
-                case Phase.INCLUDE:
-                    if (ch == '"') {
-                        phase = Phase.QUOTE;
-                        anchor = i+1;
-                    }
-                    else if (ch == '<') {
-                        phase = Phase.ANGLE;
-                        anchor = i+1;
-                    }
-                    else if (isWhite(ch)) {
-                        phase = Phase.NEXT;
-                    }
-                    break;
-                case Phase.QUOTE:
-                    if (ch == '"') {
-                        result ~= Include(fixTrail(content[anchor .. i]), origin.line, true);
-                        phase = Phase.NEXT;
-                        //say("%s: found quoted include of %s", path, content[anchor .. i]);
-                    }
-                    else if (isWhite(ch)) {
-                        phase = Phase.NEXT;
-                    }
-                    break;
-                case Phase.ANGLE:
-                    if (ch == '>') {
-                        result ~= Include(fixTrail(content[anchor .. i]), origin.line, false);
-                        phase = Phase.NEXT;
-                        //say("%s: found system include of %s", path, content[anchor .. i]);
-                    }
-                    else if (isWhite(ch)) {
-                        phase = Phase.NEXT;
-                    }
-                    break;
-                case Phase.NEXT:
-                    break;
-                default:
-                    error(origin, "invalid phase");
+                }
+
+                // Cross-multiply with prefix and suffix
+                foreach (value; values) {
+                    result ~= prefix ~ value ~ suffix ~ " ";
                 }
             }
+            else {
+                // No variable - just use the suffix
+                result ~= suffix ~ " ";
+            }
+
+            // Clean up for next token
+            prefix  = "";
+            varname = "";
+            suffix  = "";
+            inToken = false;
+            inCurly = false;
         }
+
+        foreach (pos, ch; text) {
+            if (!inToken && !isWhite(ch)) {
+                // Starting a token
+                inToken = true;
+                anchor  = pos;
+            }
+            else if (inToken && ch == '{' && prev == '$') {
+                // Starting a varname within a token
+                prefix  = text[anchor .. pos-1];
+                inCurly = true;
+                anchor  = pos + 1;
+            }
+            else if (ch == '}') {
+                // Finished a varname within a token
+                if (!inCurly) {
+                    fatal("Unmatched '}' in '%s'", text);
+                }
+                varname = text[anchor .. pos];
+                inCurly = false;
+                anchor  = pos + 1;
+            }
+            else if (inToken && isWhite(ch)) {
+                // Finished a token
+                finishToken(pos);
+            }
+            prev = ch;
+        }
+        if (inToken) {
+            finishToken(text.length);
+        }
+        return result.strip();
     }
+
+    string result = resolve(command);
+    //say("resolved command = %s", result);
     return result;
 }
 
 
 //
-// Scan a D source file for imports.
+// Read paths for files depended on from a deps output and return them,
+// together with the inputs used to produce the output files.
 //
-// The parser is simple and fast, but can't deal with version
-// statements or mixins. This is ok for now because it only needs
-// to work for source we have control over.
+// In-project files have relative paths, and system files have
+// absolute paths.
 //
-// The approach is:
-// * Scan for a line starting with "static", "public", "private" or ""
-//   followed by "import".
-// * Then look for:
-//     ':' - module is previous word, and then skip to next ';'.
-//     ',' - module is previous word.
-//     ';' - module is previous word.
-//   The import is terminated by a ';'.
+// The deps output contains either:
+// * A lot of junk with paths of interest in parentheses, or
+// * Leading junk terminated with a colon, then just the paths,
+//   possibly with backslashes escaping newlines.
 //
-Include[] scanForImports(string path) {
-    Include[] result;
-    string content = readText(path);
-    string word;
-    int anchor, line=1;
-    bool inWord, inImport, ignoring;
+string[] parseDeps(string path, string[] inputs) {
+    bool[string] got;
 
-    string[] externals = [ "core", "std" ];
+    foreach (input; inputs) {
+        got[input] = true;
+    }
 
-    foreach (int pos, char ch; content) {
-        if (ch == '\n') {
-            line++;
-        }
-        if (ignoring) {
-            if (ch == ';' || ch == '\n') {
-                // resume looking for imports
-                ignoring = false;
-                inWord   = false;
-                inImport = false;
+    if (path.exists) {
+        auto content = path.readText;
+        path.remove;
+
+        bool parens;
+        foreach (ch; content) {
+            if (ch == '\\') break;
+            if (ch == '(') {
+                parens = true;
+                break;
             }
-            else {
-                // ignore
+        }
+
+        if (parens) {
+            // The paths are enclosed in parentheses
+            foreach (word; content.splitter(' ')) {
+                if (word.length > 2 && word[0] == '(' && word[$-1] == ')') {
+                    got[word[1..$-1]] = true;
+                }
             }
         }
         else {
-            // we are not ignoring
-
-            if (inWord && (isWhite(ch) || ch == ':' || ch == ',' || ch == ';')) {
-                inWord = false;
-                word = content[anchor .. pos];
-
-                if (!inImport) {
-                    if (isWhite(ch)) {
-                        if (word == "import") {
-                            inImport = true;
-                        }
-                        else if (word != "public" && word != "private" && word != "static") {
-                            ignoring = true;
-                        }
-                    }
-                    else {
-                        ignoring = true;
+            // Everything after the first ':' except backslashes are paths
+            bool started;
+            foreach (word; content.splitter(' ')) {
+                if (started) {
+                    word = word.strip;
+                    if (word.length > 0 && word[0] != '\\') {
+                        got[word] = true;
                     }
                 }
-            }
-
-            if (inImport && word && (ch == ':' || ch == ',' || ch == ';')) {
-                // previous word is a module name
-
-                string trail = std.array.replace(word, ".", dirSeparator) ~ ".d";
-
-                bool ignored = false;
-                foreach (external; externals) {
-                    string ignoreStr = external ~ dirSeparator;
-                    if (trail.length >= ignoreStr.length &&
-                        trail[0 .. ignoreStr.length] == ignoreStr)
-                    {
-                        ignored = true;
-                        break;
-                    }
+                else if (word[$-1] == ':') {
+                    started = true;
                 }
-
-                if (!ignored) {
-                    result ~= Include(trail, line, true);
-                }
-                word = null;
-
-                if      (ch == ':') ignoring = true;
-                else if (ch == ';') inImport = false;
-            }
-
-            if (!inWord && !(isWhite(ch) || ch == ':' || ch == ',' || ch == ';')) {
-                inWord = true;
-                anchor = pos;
             }
         }
     }
 
-    return result;
+    return got.keys();
 }
 
 

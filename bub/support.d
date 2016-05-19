@@ -385,25 +385,6 @@ long modifiedTime(string path, bool isTarget) {
 
 
 //
-// Return true if the given suffix implies a scannable file.
-//
-bool isScannable(string suffix) {
-    string ext = extension(suffix);
-    if (ext is null) ext = suffix;
-    return
-        ext == ".c"   ||
-        ext == ".h"   ||
-        ext == ".cc"  ||
-        ext == ".hh"  ||
-        ext == ".cxx" ||
-        ext == ".hxx" ||
-        ext == ".cpp" ||
-        ext == ".hpp" ||
-        ext == ".d";
-}
-
-
-//
 // Return true if str starts with any of the given prefixes
 //
 bool startsWith(string str, string[] prefixes) {

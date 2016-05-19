@@ -16,7 +16,8 @@ Some of bub's features that are useful on large projects are:
 
 * Automatic execution and evaluation of tests.
 
-* Generated files are not scanned for imports/includes until after they are up to date.
+* Built files are not produced until all the files that they might depend on
+  are up to date.
 
 
 Bub is currently primarily developed and tested on Linux, but has also been partly
