@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2013, Graham St Jack.
+ * Copyright 2012-2016, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -23,8 +23,6 @@ This module provides assorted low-level support code for bub.
 
 module bub.support;
 
-import bub.concurrency;
-
 import std.algorithm;
 import std.array;
 import std.ascii;
@@ -37,7 +35,9 @@ import std.path;
 import std.process;
 import std.stdio;
 import std.string;
+import std.concurrency;
 
+import core.time;
 import core.bitop;
 import core.thread;
 
@@ -233,18 +233,6 @@ shared static this() {
     killer = new Killer();
 }
 
-//-----------------------------------------------------------------------
-// Inter-thread commmunication protocols.
-//-----------------------------------------------------------------------
-
-alias Protocol!(Message!("work",
-                         string, "action",
-                         string, "command",
-                         string, "targets")) WorkerProtocol;
-
-alias Protocol!(Message!("success",
-                         string, "action"),
-                Message!("bailed")) PlannerProtocol;
 
 //-----------------------------------------------------------------------
 // Signal handling to bail on SIGINT or SIGHUP.
@@ -253,15 +241,22 @@ alias Protocol!(Message!("success",
 __gshared ubyte bailFlag = 0;
 
 void doBailer() {
-    while (volatileLoad(&bailFlag) == 0)
-    {
-        Thread.sleep(dur!("msecs")(50));
+    try {
+        // Wait until it is time to call killer.bail(), or to teminate
+        while (volatileLoad(&bailFlag) == 0)
+        {
+            // Wait for a short while to see if our owner has terminated,
+            // in which case we get an exception.
+            receiveTimeout(50.msecs, (bool bogus) {});
+        }
+
+        if (volatileLoad(&bailFlag) == 1)
+        {
+            say("Got a termination signal - bailing");
+            killer.bail();
+        }
     }
-    if (volatileLoad(&bailFlag) == 1)
-    {
-        say("Got a termination signal - bailing");
-        killer.bail();
-    }
+    catch (Exception ex) {} // Owner has terminated - do so as well
 }
 
 extern (C) void mySignalHandler(int sig) nothrow @nogc @system {
@@ -405,5 +400,3 @@ bool startsWith(string str, string[] prefixes) {
 bool g_print_rules;
 bool g_print_deps;
 bool g_print_details;
-
-

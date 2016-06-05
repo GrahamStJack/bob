@@ -1,8 +1,3 @@
-static-lib concurrency : concurrency.d;
-
-test-exe concurrency-test : concurrency_test.d;
-
-
 dist-exe bub-config : bub_config.d;
 
 dist-exe bub : support.d worker.d parser.d planner.d bub_main.d;

@@ -19,7 +19,6 @@
 
 module bub.planner;
 
-import bub.concurrency;
 import bub.parser;
 import bub.support;
 
@@ -30,6 +29,7 @@ import std.path;
 import std.range;
 import std.string;
 import std.process;
+import std.concurrency;
 
 static import std.array;
 
@@ -1334,14 +1334,7 @@ void cleandirs() {
 //
 // Planner function
 //
-bool doPlanning(uint                 numWorkers,
-                bool                 printStatements,
-                bool                 printDeps,
-                bool                 printDetails,
-                PlannerProtocol.Chan plannerChannel,
-                WorkerProtocol.Chan  workerChannel) {
-
-    uint inflight;
+bool doPlanning(Tid[] workerTids, bool printStatements, bool printDeps, bool printDetails) {
 
     // Ensure tmp exists so the workers have a sandbox.
     if (!exists("tmp")) {
@@ -1367,7 +1360,7 @@ bool doPlanning(uint                 numWorkers,
         cleandirs();
 
         // Now that we know about all the files and have the mostly-complete
-        // dependency graph (just what libraries to link still uncertain), issue
+        // dependency graph (what libraries to link is still uncertain), issue
         // all the actions we can, which is enough to trigger building everything.
         foreach (path, file; File.byPath) {
             if (file.built) {
@@ -1375,11 +1368,14 @@ bool doPlanning(uint                 numWorkers,
             }
         }
 
-        while (File.outstanding.length) {
+        // A queue of idle worker indexes. A PriorityQueue is overkill, but it is easy to use...
+        PriorityQueue!uint idle;
+        for (uint index = 0; index < workerTids.length; ++index) idle.insert(index);
 
-            // Issue more actions till inflight matches number of workers.
-            while (inflight < numWorkers && !Action.queue.empty) {
-                const Action next = Action.queue.front();
+        while (File.outstanding.length) {
+            // Send actions till there are no idle workers or no more issued actions.
+            while (!idle.empty && !Action.queue.empty) {
+                const Action next = Action.queue.front;
                 Action.queue.popFront();
 
                 string targets;
@@ -1390,38 +1386,34 @@ bool doPlanning(uint                 numWorkers,
                     }
                     targets ~= target.path;
                 }
-                WorkerProtocol.sendWork(workerChannel, next.name, next.command, targets);
-                ++inflight;
+
+                int index = idle.front;
+                idle.popFront();
+                workerTids[index].send(next.name, next.command, targets);
             }
 
-            if (!inflight) {
-                say("Outstanding=%s", File.outstanding.keys());
+            if (idle.length == workerTids.length) {
                 fatal("Nothing to do with %s outstanding and no inflight actions - "
                       "something is wrong",
                       File.outstanding.length);
             }
 
             // Wait for a worker to report back.
-            auto msg = plannerChannel.receive();
-            final switch (msg.type) {
-                case PlannerProtocol.Type.Success:
-                {
-                    --inflight;
+            receive(
+                (uint index, string action) {
+                    idle.insert(index);
                     string[] inputs;
-                    foreach (file; Action.byName[msg.success.action].inputs) {
+                    foreach (file; Action.byName[action].inputs) {
                         inputs ~= file.path;
                     }
-                    foreach (file; Action.byName[msg.success.action].builds) {
+                    foreach (file; Action.byName[action].builds) {
                         file.updated(inputs);
                     }
-                    break;
+                },
+                (bool dummy) {
+                    fatal("Aborting due to action failure.");
                 }
-                case PlannerProtocol.Type.Bailed:
-                {
-                    fatal("Aborting build due to action failure.");
-                    break;
-                }
-            }
+            );
         }
     }
     catch (BailException ex) {}

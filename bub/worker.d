@@ -19,7 +19,6 @@
 
 module bub.worker;
 
-import bub.concurrency;
 import bub.support;
 
 import std.datetime;
@@ -28,6 +27,7 @@ import std.file;
 import std.path;
 import std.process;
 import std.string;
+import std.concurrency;
 
 static import std.stdio;
 
@@ -35,14 +35,10 @@ static import std.stdio;
 //
 // The worker function.
 //
-// Get instructions from the workerChannel, do the work via
-// (usually) a spawned process, then give the results back via
-// the plannerChannel.
+// Get instructions from our mailbox, do the work via (usually) a spawned process,
+// then give the results back via our owner's mailbox.
 //
-void doWork(bool                 printActions,
-            uint                 index,
-            PlannerProtocol.Chan plannerChannel,
-            WorkerProtocol.Chan  workerChannel) {
+void doWork(bool printActions, uint index) {
     bool success;
 
     string myName = format("worker%d", index);
@@ -58,14 +54,7 @@ void doWork(bool                 printActions,
 
         bool isTest = command.length > 5 && command[0 .. 5] == "TEST ";
 
-        if (command == "DUMMY") {
-            // Just write some text into the target file
-            std.file.write(targets, "dummy");
-            PlannerProtocol.sendSuccess(plannerChannel, action);
-            return;
-        }
-
-        else if (command.length > 5 && command[0..5] == "COPY ") {
+        if (command.length > 5 && command[0..5] == "COPY ") {
             // Do the copy ourselves because Windows doesn't seem to have an
             // external copy command, and this is faster anyway.
             string[] splitCommand = split(command);
@@ -81,7 +70,7 @@ void doWork(bool                 printActions,
                 // Preserve executable permission
                 to.setExecutableIf(from);
             }
-            PlannerProtocol.sendSuccess(plannerChannel, action);
+            ownerTid.send(index, action);
             return;
         }
 
@@ -155,6 +144,7 @@ void doWork(bool                 printActions,
                         }
                     }
                 }
+                ownerTid.send(true);
                 say("%s: FAILED\n%s", action, command);
             }
             throw new BailException();
@@ -184,25 +174,20 @@ void doWork(bool                 printActions,
             }
 
             // tell planner the action succeeded
-            PlannerProtocol.sendSuccess(plannerChannel, action);
+            ownerTid.send(index, action);
         }
     }
 
 
+    // Carry out actions received from owner until something goes wrong.
     try {
         while (true) {
-            auto msg = workerChannel.receive();
-            final switch (msg.type) {
-                case WorkerProtocol.Type.Work:
-                {
-                    perform(msg.work.action, msg.work.command, msg.work.targets);
+            receive(
+                (string action, string command, string targets) {
+                    perform(action, command, targets);
                 }
-            }
+            );
         }
     }
-    catch (ChannelFinalized ex) {}
-    catch (BailException ex) {}
-    catch (Exception ex)  { say("Unexpected exception: %s", ex.msg); }
-
-    PlannerProtocol.sendBailed(plannerChannel);
+    catch (Exception ex) {}
 }
