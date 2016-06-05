@@ -956,6 +956,8 @@ bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
             if (!path.isAbsolute) {
                 File file = File.byPath[path];
                 if (file !in done) {
+                    done[file] = true;
+
                     auto binary = file in Binary.byContent;
                     errorUnless(binary !is null, file.origin,
                                 "%s depends on %s, which isn't contained by something", obj, file); 
@@ -964,28 +966,48 @@ bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
                         // Add all the binary's sysLibs
                         foreach (lib, dummy; binary.reqSysLibs) {
                             if (lib !in done) {
+                                done[lib] = true;
                                 sysLibs ~= lib;
                             }
                         }
 
-                        if (*binary !is target) {
+                        if (*binary !is target && *binary !in done) {
+                            done[*binary] = true;
+
                             // Must be a StaticLib
                             auto slib = cast(StaticLib*) binary;
                             errorUnless(slib !is null, binary.origin, "Expected %s to be a StaticLib", binary);
 
                             // Add this slib, or the dynamic lib that contains it
                             auto dlib = *slib in DynamicLib.byContent;
+                            bool usedDlib;
                             if (dlib is null || dlib.number > target.number) {
-                                if (slib.objs.length > 0) {
-                                    errorUnless(!preventStaticLibs, target.origin,
-                                                "%s cannot link with static lib %s", target, *slib);
-                                    target.action.addDependency(*slib);
-                                    staticLibs ~= *slib;
-                                }
+                                errorUnless(!preventStaticLibs, target.origin,
+                                            "%s cannot link with static lib %s", target, *slib);
+                                target.action.addDependency(*slib);
+                                staticLibs ~= *slib;
                             }
                             else if (*dlib !in done && *dlib !is target) {
+                                done[*dlib] = true;
+
+                                usedDlib = true;
                                 target.action.addDependency(*dlib);
                                 dynamicLibs ~= *dlib;
+                            }
+
+                            if (usedDlib) {
+                                // Accumulate all the dependencies of all the contained static libs
+                                foreach (containedSlib; dlib.staticLibs) {
+                                    foreach (libObj; containedSlib.objs) {
+                                        accumulate(libObj);
+                                    }
+                                }
+                            }
+                            else {
+                                // Accumulate all the dependencies of the static lib
+                                foreach (libObj; slib.objs) {
+                                    accumulate(libObj);
+                                }
                             }
                         }
                     }
