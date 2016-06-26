@@ -295,15 +295,15 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
             auto candidate = buildPath(dir, name);
             if (candidate.exists) {
                 assert(pkgPath is null, format("%s found in both %s and %s", name, pkgPath, candidate));
+                pkgPath = candidate;
             }
-            pkgPath = candidate;
         }
         assert(pkgPath !is null, format("Could not find %s in any of %s", name, vars["ROOTS"]));
         pkgPaths[name] = pkgPath;
     }
 
     foreach (name, path; pkgPaths) {
-        makeSymlink(buildPath(srcDir, path), buildPath(localSrcPath, path));
+        makeSymlink(buildNormalizedPath(srcDir, path), buildPath(localSrcPath, name));
     }
 
     update(buildPath(localSrcPath, "Bubfile"), "contain" ~ contain ~ ";", false);
