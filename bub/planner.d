@@ -515,7 +515,6 @@ final class Pkg : Node {
 class File : Node {
     static DependencyCache cache;       // Cache of information gleaned from ${DEPS} in commands
     static File[string]    byPath;      // Files by their path
-    static File[][string]  byName;      // Files by their basename
     static bool[File]      allBuilt;    // all built files
     static bool[File]      outstanding; // outstanding buildable files
     static int             nextNumber;
@@ -541,7 +540,8 @@ class File : Node {
     }
 
     this(ref Origin origin, Node parent_, string name_, Privacy privacy_, string path_, bool built_) {
-        super(origin, parent_, name_, privacy_);
+        string nodeName = name_.replace("/", "__"); // Allow files to be in subdirectories
+        super(origin, parent_, nodeName, privacy_);
 
         this.origin = origin;
 
@@ -554,7 +554,6 @@ class File : Node {
 
         errorUnless(path !in byPath, origin, "%s already defined", path);
         byPath[path] = this;
-        byName[baseName(path)] ~= this;
 
         if (built) {
             ++numBuilt;
@@ -570,7 +569,7 @@ class File : Node {
         string path1 = prospectivePath("obj", parent, extra);  // a built file in obj directory tree
         string path2 = prospectivePath("src", parent, extra);  // a source file in src directory tree
 
-        string name  = baseName(extra);
+        string name = extra.replace("/", "__");
 
         File * file = path1 in byPath;
         if (file) {

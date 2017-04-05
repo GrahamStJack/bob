@@ -310,12 +310,12 @@ string[] parseDeps(string path, string[] inputs) {
 // read a Bubfile, returning all its statements
 //
 // //  a simple statement
-// rulename targets... : arg1... : arg2... : arg3...; // can expand Buboptions variable with ${var-name}
+// rulename targets... : arg1... : arg2... : arg3...;
 //
 
 struct Statement {
     Origin   origin;
-    int      phase;    // 0==>empty, 1==>rule populated, 2==rule,targets populated, etc
+    int      phase; // 0==>empty, 1==>rule populated, 2==rule,targets populated, etc
     string   rule;
     string[] targets;
     string[] arg1;
@@ -340,71 +340,109 @@ Statement[] readBubfile(string path) {
 
     string content = readText(path);
 
-    int       anchor;
-    bool      inWord;
-    bool      inComment;
-    Statement statement;
+    int          anchor;
+    bool         inWord;
+    bool         inComment;
+    bool         waitingForOpeningBrace;
+    bool         waitingForClosingBrace;
+    bool         usingText = true;
+    Statement    statement;
+    bool[string] architectures;
 
-    foreach (int pos, char ch ; content) {
-        if (ch == '\n') {
-            ++origin.line;
-        }
-        if (ch == '#') {
-            inComment = true;
+    foreach (architecture; split(getOption("ARCHITECTURE"))) {
+        architectures[architecture] = true;
+    }
+
+    void processWord(int pos, char ch) {
+        if (inWord) {
             inWord = false;
-        }
-        if (inComment) {
-            if (ch == '\n') {
-                inComment = false;
-                anchor = pos;
+            string word = content[anchor .. pos];
+
+            if (word.length > 2 && word[0] == '[' && ch == ']') {
+                // Start of a conditional
+                waitingForOpeningBrace = true;
+                usingText              = (word[1..$] in architectures) !is null;
             }
-        }
-        else if ((isWhite(ch) || ch == ':' || ch == ';')) {
-            if (inWord) {
-                inWord = false;
-                string word = content[anchor .. pos];
-
-                // should be a word in a statement
-
-                string[] words = [word];
-
-                if (word.length > 3 && word[0 .. 2] == "${" && word[$-1] == '}') {
-                    // macro substitution
-                    words = split(getOption(word[2 .. $-1]));
-                }
-
+            else {
                 if (word.length > 0) {
                     if (statement.phase == 0) {
                         statement.origin = origin;
-                        statement.rule = words[0];
+                        statement.rule = word;
                         ++statement.phase;
                     }
                     else if (statement.phase == 1) {
-                        statement.targets ~= words;
+                        statement.targets ~= word;
                     }
                     else if (statement.phase == 2) {
-                        statement.arg1 ~= words;
+                        statement.arg1 ~= word;
                     }
                     else if (statement.phase == 3) {
-                        statement.arg2 ~= words;
+                        statement.arg2 ~= word;
                     }
                     else if (statement.phase == 4) {
-                        statement.arg3 ~= words;
+                        statement.arg3 ~= word;
                     }
                     else {
                         error(origin, "Too many arguments in %s", path);
                     }
                 }
             }
+        }
+    }
 
-            if (ch == ':' || ch == ';') {
-                ++statement.phase;
-                if (ch == ';') {
-                    if (statement.phase > 1) {
-                        statements ~= statement;
-                    }
-                    statement = statement.init;
-                }
+    foreach (int pos, char ch; content) {
+        if (ch == '\n') {
+            ++origin.line;
+        }
+
+        if (usingText && ch == '#') {
+            processWord(pos, ch);
+            inComment = true;
+            inWord    = false;
+        }
+
+        if (inComment) {
+            if (ch == '\n') {
+                inComment = false;
+            }
+        }
+        else if (waitingForOpeningBrace) {
+            if (ch == '{') {
+                waitingForOpeningBrace = false;
+                waitingForClosingBrace = true;
+            }
+            else {
+                errorUnless(isWhite(ch), origin, "Unexpected non-whitespace between '[' and '{'");
+            }
+        }
+        else if (waitingForClosingBrace && !usingText) {
+            if (ch == '}') {
+                waitingForClosingBrace = false;
+                usingText              = true;
+            }
+        }
+        else if (ch == '{') {
+            error(origin, "Unexpected opening brace");
+        }
+        else if (ch == '}') {
+            errorUnless(waitingForClosingBrace, origin, "Unexpected closing brace");
+            waitingForClosingBrace = false;
+            processWord(pos, ch);
+        }
+        else if (isWhite(ch)) {
+            processWord(pos, ch);
+        }
+        else if (ch == ']') {
+            errorUnless(content[anchor] == '[', origin, "Unexpected ']'");
+            processWord(pos, ch);
+        }
+        else if (ch == ':' || ch == ';') {
+            processWord(pos, ch);
+            ++statement.phase;
+            if (ch == ';') {
+                errorUnless(statement.phase > 1, origin, "Incomplete statement");
+                statements ~= statement;
+                statement = statement.init;
             }
         }
         else if (!inWord) {

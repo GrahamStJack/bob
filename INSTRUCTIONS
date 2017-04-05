@@ -178,6 +178,9 @@ dist
 Building
 ========
 
+Introduction
+------------
+
 Bub is the build tool. It always builds the whole project, so there is no build
 target to specify on the command-line. This isn't a problem because:
 * Bub determines what needs to be done quickly.
@@ -204,11 +207,47 @@ Bubfile syntax is:
 where a parameter is a space-separated list of tokens.
 
 
+Conditional Bubfile content
+~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+A Bubfile can contain configuration-dependent parts via the ARCHITECTURE
+variable defined in the configuration file, like so:
+
+[value] { content }
+
+Where whitespace is not significant, and only whitespace can appear between ']' and '{',
+and '}' can only be used to terminate a braced section.
+The braced text is ignored unless ARCHITECTURE contains the specified value. For example, if
+
+bub.cfg contains:
+  ARCHITECTURE = Windows Mingw
+
+and a Bubfile contains:
+  static-lib foo :
+                   header1.h header2.h
+                 :
+                   body1.cc
+                   [Windows]{ windows_body2.cc }
+                   [Posix]  { posix_body2.cc   }
+                 ;
+
+  [Mingw] {
+      misc windows_docco.rst;
+  }
+
+then the Windows and Mingw parts are present, but the Posix part is not.
+
+Conditionals cannot be nested.
+
+
+Statement types
+---------------
+
 Statement types are:
 
 
 Contain
--------
+~~~~~~~
 
 contain subdir-names [: protected];
 
@@ -220,7 +259,7 @@ specified in dependency order (lowest level first).
 
 
 Static Lib
-----------
+~~~~~~~~~~
 
 static-lib lib-name : public-source : protected-source [: required-sys-libs];
 public-lib lib-name : public-source : protected-source [: required-sys-libs];
@@ -255,7 +294,7 @@ public-lib is identical to static-lib except that:
 
 
 Dynamic Lib
------------
+~~~~~~~~~~~
 
 dynamic-lib name : static-libs;
 
@@ -288,7 +327,7 @@ Note that a directory can contain any number of static and dynamic directories.
 
 
 Executable
-----------
+~~~~~~~~~~
 
 dist-exe exe-name : source [: required-sys-libs];
 test-exe exe-name : source [: required-sys-libs];
@@ -313,7 +352,7 @@ if necessary. The temporary directory is deleted if the test passes.
 
 
 Scripts, data and docs
-----------------------
+~~~~~~~~~~~~~~~~~~~~~~
 
 misc names [: dist-destination-path]
 
