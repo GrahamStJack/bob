@@ -51,6 +51,7 @@ void doWork(bool printActions, uint index) {
         if (printActions) { say("\n%s\n", command); }
 
         success = false;
+        string[string] env;
 
         bool isTest = command.length > 5 && command[0 .. 5] == "TEST ";
 
@@ -74,13 +75,27 @@ void doWork(bool printActions, uint index) {
             return;
         }
 
+        else if (command.length > 6 && command[0..6] == "DUMMY ") {
+            // Create a dummy file
+            string[] splitCommand = split(command);
+            if (splitCommand.length != 2) {
+                fatal("Got invalid dummy-file command '%s'", command);
+            }
+            string target = splitCommand[1];
+            std.file.write(target, "dummy");
+            ownerTid.send(index, action);
+            return;
+        }
+
         else if (isTest) {
             // Do test preparation - choose tmp dir and remove it if present
             tmpPath = buildPath("tmp", myName ~ "-test");
-            if (exists(tmpPath)) {
+            if (tmpPath.exists) {
                 rmdirRecurse(tmpPath);
             }
-            command = command[5 .. $] ~ " --tmp=" ~ tmpPath;
+            mkdir(tmpPath);
+            env["TMP_PATH"] = tmpPath;
+            command = command[5 .. $];
         }
 
         string[] targs = split(targets, "|");
@@ -98,7 +113,7 @@ void doWork(bool printActions, uint index) {
         try {
             auto splitCommand = split(command); // TODO handle quoted args
 
-            Pid child = spawnProcess(splitCommand, std.stdio.stdin, output, output);
+            Pid child = spawnProcess(splitCommand, std.stdio.stdin, output, output, env);
 
             killer.launched(myName, child);
             success = wait(child) == 0;

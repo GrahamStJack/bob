@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2016, Graham St Jack.
+ * Copyright 2012-2017, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -54,6 +54,13 @@ struct GenerateCommand {
     string   command;
 }
 GenerateCommand[string] generateCommands; // Gernerate command by input extension
+
+// Extra flags to apply if a SysLib is depended on
+struct SysLibDefinition {
+    string[] compileFlags;
+    string[] linkFlags;
+}
+SysLibDefinition[string] sysLibDefinitions; // by syslib name
 
 bool[string] reservedExts;
 static this() {
@@ -120,6 +127,23 @@ void readOptions() {
                     generateCommands[input] = GenerateCommand(outputs, value);
                 }
             }
+            else if (key.startsWith("syslib-")) {
+                // A syslib's compile or link flags
+                auto words = split(key);
+                if (words.length != 2) {
+                    fatal("syslib options require a two-word key: ", key);
+                }
+                auto name = words[1];
+                if (name !in sysLibDefinitions) {
+                    sysLibDefinitions[name] = SysLibDefinition();
+                }
+                if (words[0] == "syslib-compile-flags") {
+                    sysLibDefinitions[name].compileFlags = value.split;
+                }
+                else {
+                    sysLibDefinitions[name].linkFlags = value.split;
+                }
+            }
             else {
                 // A variable
                 options[key] = value;
@@ -131,7 +155,7 @@ void readOptions() {
     }
 
     // Hard-coded options
-    options["PROJ_INC"] = "src obj";
+    options["PROJ_INC"] = "src obj .";
     options["PROJ_LIB"] = buildPath("dist", "lib") ~ " obj";
 }
 
@@ -151,8 +175,9 @@ string getOption(string key) {
 //
 // Return a fully resolved command by transitively replacing its ${<option>} tokens
 // with tokens from options, extras or environment, cross-multiplying with adjacent text.
+// After all that is done, add sysLibFlags
 //
-string resolveCommand(string command, string[string] extras) {
+string resolveCommand(string command, string[string] extras, string[] sysLibFlags) {
     //say("resolving command %s with extras=%s", command, extras);
 
     // Local function to expand variables in a string.
@@ -240,6 +265,9 @@ string resolveCommand(string command, string[string] extras) {
     }
 
     string result = resolve(command);
+    foreach (flag; sysLibFlags) {
+        result ~= " " ~ flag;
+    }
     //say("resolved command = %s", result);
     return result;
 }

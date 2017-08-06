@@ -41,6 +41,7 @@ import std.stdio;
 import std.conv;
 import std.ascii;
 import std.process;
+import std.exception;
 
 import core.stdc.stdlib;
 
@@ -160,8 +161,12 @@ string toEnv(string envName, const ref Vars vars, string[] varNames, string[] ex
         }
     }
     if (result) {
-        result = ENV_PREFIX ~ envName ~ "=\"" ~ result[0..$-ENV_DELIM.length] ~ "\"\n";
+        result = ENV_PREFIX ~ envName ~ "=\"" ~ result[0..$-ENV_DELIM.length];
     }
+    if (result[$-ENV_DELIM.length..$] == ENV_DELIM) {
+        result = result[0..$-ENV_DELIM.length];
+    }
+    result ~= "\"\n"; 
     return result;
 }
 
@@ -232,9 +237,9 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
 
     // Create environment file.
-    string lib  = buildPath(buildDir, "dist", "lib");
-    string bin  = buildPath(buildDir, "dist", "bin");
-    string data = buildPath(buildDir, "dist", "data");
+    string lib  = buildPath("dist", "lib");
+    string bin  = buildPath("dist", "bin");
+    string data = buildPath("dist", "data");
     string env  = buildPath(buildDir, "environment");
     string envText;
     version(Posix) {
@@ -248,6 +253,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
                                      ["SYS_PATH"],
                                      [bin] ~ fromEnv("PATH"));
         envText ~= "export DIST_DATA_PATH=\"" ~ data ~ "\"\n";
+        envText ~= "export SYSTEM_DATA_PATH=\"" ~ data ~ "\"\n";
     }
     version(Windows) {
         envText ~= toEnv("PATH", vars, ["SYS_LIB", "SYS_PATH"], [lib, bin] ~ fromEnv("PATH"));
@@ -258,7 +264,11 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
     // Create run script
     version(Posix) {
-        string runText = "#!/bin/bash\nsource " ~ env ~ "\n$@\n";
+        string runText =
+            "#!/bin/bash\n" ~
+            "source environment\n" ~
+            "export TMP_PATH=\"tmp/tmp-$(basename \"${1}\")\"\n" ~
+            "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec \"$@\"";
         update(buildPath(buildDir, "run"), runText, true);
     }
     version(Windows) {
@@ -272,27 +282,38 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     // specified repositories.
     //
 
-    // Make clean src dir.
+    // Make clean repos and src dirs.
+    string localReposPath = buildPath(buildDir, "repos");
+    if (exists(localReposPath)) {
+        rmdirRecurse(localReposPath);
+    }
+    mkdir(localReposPath);
     string localSrcPath = buildPath(buildDir, "src");
     if (exists(localSrcPath)) {
         rmdirRecurse(localSrcPath);
     }
     mkdir(localSrcPath);
 
-    // Make a symbolic link to each top-level package specified in CONTAIN, and looked
-    // for in all of ROOTS - then write the project Bubfile.
-
+    assert("REPOS"   in vars && vars["REPOS"].length,   "REPOS variable is not set");
     assert("ROOTS"   in vars && vars["ROOTS"].length,   "ROOTS variable is not set");
     assert("CONTAIN" in vars && vars["CONTAIN"].length, "CONTAIN variable is not set");
 
-    string[string] pkgPaths;
+    // Make symbolic links to each repo
+    foreach (relPath; vars["REPOS"]) {
+        auto repoPath = buildNormalizedPath(srcDir, relPath).absolutePath;
+        auto repoName = repoPath.baseName;
+        makeSymlink(repoPath, buildPath(localReposPath, repoName));
+    }
 
+    // Make a symbolic link to each top-level package specified in CONTAIN, and looked
+    // for in all of ROOTS - then write the project Bubfile.
+    string[string] pkgPaths;
     string contain;
     foreach (name; vars["CONTAIN"]) {
         contain ~= " " ~ name;
         string pkgPath;
-        foreach (dir; vars["ROOTS"]) {
-            auto candidate = buildPath(dir, name);
+        foreach (repo; vars["ROOTS"]) {
+            auto candidate = buildPath(repo, name);
             if (candidate.exists) {
                 assert(pkgPath is null, format("%s found in both %s and %s", name, pkgPath, candidate));
                 pkgPath = candidate;
@@ -301,11 +322,11 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
         assert(pkgPath !is null, format("Could not find %s in any of %s", name, vars["ROOTS"]));
         pkgPaths[name] = pkgPath;
     }
-
     foreach (name, path; pkgPaths) {
         makeSymlink(buildNormalizedPath(srcDir, path), buildPath(localSrcPath, name));
     }
 
+    // Create the top-level Bubfile
     update(buildPath(localSrcPath, "Bubfile"), "contain" ~ contain ~ ";", false);
 
     // print success
@@ -314,11 +335,47 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
 
 
 //
+// Return whatever the given string evaluates to, replacing any $(<command>) instances
+// with whatever <command> outputs.
+//
+string evaluate(string text) {
+    string result;
+    bool   inCommand;
+    char   prev;
+    size_t commandStart;
+
+    foreach (i, ch; text) {
+        if (ch == '(' && prev == '$') {
+            enforce(!inCommand, "Nested commands not supported");
+            inCommand    = true;
+            commandStart = i + 1;
+            result       = result[0..$-1];
+        }
+        else if (inCommand && ch == ')') {
+            auto command = text[commandStart..i];
+            auto rc      = executeShell(command);
+            enforce(rc.status == 0, format("Failed to run '%s', output '%s'", command, rc.output));
+            result ~= rc.output;
+            inCommand = false;
+        }
+        else if (!inCommand) {
+            result ~= ch;
+        }
+        prev = ch;
+    }
+    result = result.strip;
+    enforce(!inCommand, format("Unterminated command in '", text, "'"));
+    //writeln("'", text, "' evaluated to '", result, "'");
+    return result;
+}
+
+
+//
 // Parse the config file, returning the variable definitions it contains.
 //
 Vars parseConfig(string configFile, string mode) {
 
-    enum Section { none, defines, modes }
+    enum Section { none, defines, modes, syslibCompileFlags, syslibLinkFlags }
 
     Section section = Section.none;
     bool    inMode;
@@ -347,33 +404,61 @@ Vars parseConfig(string configFile, string mode) {
         }
 
         else {
-            if (section == Section.defines) {
-                string[] tokens = split(line, " =");
-                if (tokens.length == 2) {
-                    // Define a new variable.
-                    vars.append(strip(tokens[0]), split(tokens[1]), AppendType.notExist);
+            final switch (section) {
+                case Section.none: {
+                    writeln("Found line outside of a section");
+                    exit(1);
+                    break;
                 }
-            }
-
-            else if (section == Section.modes) {
-                if (!line.length) {
-                    // Blank line - mode ended.
-                    inMode = false;
-                }
-                else if (!isWhite(line[0])) {
-                    // We are in a mode, which might be the one we want.
-                    inMode = strip(line) == mode;
-                    if (inMode) {
-                        foundMode = true;
-                        //writefln("Found mode %s", mode);
-                    }
-                }
-                else if (inMode) {
-                    // Add to an existing variable
-                    string[] tokens = split(line, " +=");
+                case Section.defines: {
+                    string[] tokens = split(line, " =");
                     if (tokens.length == 2) {
-                        vars.append(strip(tokens[0]), split(tokens[1]), AppendType.mustExist);
+                        // Define a new variable.
+                        vars.append(strip(tokens[0]), split(tokens[1]), AppendType.notExist);
                     }
+                    break;
+                }
+                case Section.modes: {
+                    if (!line.length) {
+                        // Blank line - mode ended.
+                        inMode = false;
+                    }
+                    else if (!isWhite(line[0])) {
+                        // We are in a mode, which might be the one we want.
+                        inMode = strip(line) == mode;
+                        if (inMode) {
+                            foundMode = true;
+                            //writefln("Found mode %s", mode);
+                        }
+                    }
+                    else if (inMode) {
+                        // Add to an existing variable
+                        string[] tokens = split(line, " +=");
+                        if (tokens.length == 2) {
+                            vars.append(strip(tokens[0]), split(tokens[1]), AppendType.mustExist);
+                        }
+                    }
+                    break;
+                }
+
+                case Section.syslibCompileFlags: {
+                    string[] tokens = split(line, " =");
+                    if (tokens.length == 2) {
+                        vars.append("syslib-compile-flags " ~ strip(tokens[0]),
+                                    split(evaluate(strip(tokens[1]))),
+                                    AppendType.notExist);
+                    }
+                    break;
+                }
+
+                case Section.syslibLinkFlags: {
+                    string[] tokens = split(line, " =");
+                    if (tokens.length == 2) {
+                        vars.append("syslib-link-flags " ~ strip(tokens[0]),
+                                    split(evaluate(strip(tokens[1]))),
+                                    AppendType.notExist);
+                    }
+                    break;
                 }
             }
         }
@@ -414,9 +499,9 @@ int main(string[] args) {
     }
 
     if (help || args.length != 2 || !mode.length) {
-        writefln("Usage: %s [options] build-dir-path\n"
-                 "  --help                Display this message.\n"
-                 "  --mode=mode-name      Build mode.\n"
+        writefln("Usage: %s [options] build-dir-path\n" ~
+                 "  --help                Display this message.\n" ~
+                 "  --mode=mode-name      Build mode.\n" ~
                  "  --config=config-file  Specifies the config file. Default bub.cfg.\n",
                  args[0]);
         exit(1);
@@ -433,6 +518,15 @@ int main(string[] args) {
     Vars vars = parseConfig(configFile, mode);
     vars["SRCDIR"] = [srcDir];
     establishBuildDir(buildDir, srcDir, vars);
+
+    auto postConfigure = "POST_CONFIGURE" in vars;
+    if (postConfigure) {
+        foreach (relToBuildPath; *postConfigure) {
+            auto fromPath = buildPath(buildDir, relToBuildPath);
+            auto toPath   = buildPath(buildDir, relToBuildPath.baseName);
+            std.file.write(toPath, std.file.read(fromPath));
+        }
+    }
 
     return 0;
 }

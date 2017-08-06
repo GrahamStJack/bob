@@ -44,64 +44,49 @@ Bub itself serves as a trivial example, doing just the basics. It may be
 a better starting point if you have a very small project.
 
 
-History
-=======
+Background
+==========
 
-Bub was initially developed to help tame the complexity in a large C++
-project.
-
-The complexity of the build system itself is taken care of by
-having bub provide the facilities that you actually need, rather than low
-level building blocks. Maintaining the configuration of a bub build system
-is very easy and simple.
+Bub was developed to help tame the complexity in a large C++ project.
 
 Bub mitigates the complexity of your project by forcing you to pay
 attention to dependencies, which has the effect of breaking your design up
 into well-defined packages, with dependencies flowing in one direction only.
 
 Benefits of this include:
+
 * The lowest-level code can be implemented and tested independently of
   the code that uses it. This opens the door to cost-effective code reuse.
+
 * Later on, a breakage in the code you are working on is detected very early
   in the build because test code is built and run early, as it doesn't need
   to depend on high-level code.
+
 * Well-factored designs with well-defined non-circular dependencies are way
   easier to understand and maintain than code with dependencies running wild.
 
-As the original C++ project grew, more challenges emperged.
+More key features of bub are:
 
-The first was the need to generate source code from things like IDL files.
-This is trickier than it appears, because the normal practice of scanning
-source files for includes at the start of the build doesn't work for generated
-code, which might not even exist at that time. Bub supports code generation,
-and importantly defers building a file until all of the generated source files
-it could depend on are up to date.
+* Support generation of source code from things like IDL files.
+  This is trickier than it appears, because the normal practice of scanning
+  source files for includes at the start of the build doesn't work for generated
+  code, which might not even exist at that time. Bub supports code generation,
+  and importantly defers building a file until all of the generated source files
+  it could depend on are up to date.
 
-The second problem was that manually keeping track of which libraries to link
-with rapidly becomes untenable as the project grows. The usual approach of
-having a very small number of libraries and deferring linking of executables
-till near the end of the build wasn't acceptable because it defeats bub's
-central purpose by having executables that depend on everything. Bub deals
-with this as follows:
-* When specifying libraries, the public and private header files of that
-  library are declared.
-* An object file dependency on a public header from a library establishes
-  a dependency on that library.
-This approach results in a massive simplification in maintenance of a
-project's build system, and also provides bub with the information it needs
-to enforce dependency rules without relying on the compiler to do it via
--I directives. Dependency violations are thus detected very early, and result
-in clear error messages.
+* Automatically determine which in-project libraries need to be linked with.
+  This facilitates painless refactoring of libraries, which rapidly becomes
+  untenable on a large projects if this information has to be maintained manually.
+  The usual approach of having a very small number of libraries and deferring
+  linking of executables till near the end of the build defeats bub's
+  central purpose by having executables that depend on everything. Bub deals
+  with this as follows:
 
-The next challenge was that a large C/C++ project wears you down after a while,
-and you really want to use a modern, high-productivity language (like D).
-Bub was extended to support the D language. The main consequence of this
-for C/C++ code is that the headers and bodies comprising a package all have
-to be in the same directory. Because by this time bub enforced dependency
-rules directly, there is no longer any benefit in putting public headers in
-a separate directory, so this doesn't present a problem.
-Bub's support for D faclitates the gradual insinuation of D into the code base,
-starting with scripts, utilities and tests, and later with production code.
+  * When specifying libraries, the public and private header files of that
+    library are declared.
+
+  * An object file dependency on a public header from a library establishes
+    a dependency on that library.
 
 
 Preparation
@@ -109,12 +94,6 @@ Preparation
 
 Bub assumes that all the source code and external libraries/utilities you will
 need are already present. It is up to you to make this happen.
-
-Typically you will have:
-* Source code in one or more repository clones or checkouts.
-* A number of required third-party packages installed in the system.
-* A number of required third-party packages or in-house packages installed
-  in non-standard locations.
 
 
 Configuration
@@ -126,7 +105,7 @@ variables - see example/bub.cfg for a fully documented example.
 
 The configured variables ultimately specify the commands used to build files.
 These commands can also write dependencies to a deps file, and this information is
-used later to decide if the built file needs to be rebuilt, and aso to determine
+used later to decide if a built file is out of date, and also to determine
 what in-project libraries to link with.
 
 The build directory you specify should be outside the source-code repositories,
@@ -135,8 +114,6 @@ multiple build directories to be using the same source. For example,
 your repository might be in ~/source/myproject, and you might have build
 directories ~/build/myproject/debug, ~/build/myproject/profile,
 ~/build/myproject/release.
-
-The build directory has links back to the source.
 
 A typical repository directory structure is:
 
@@ -158,16 +135,18 @@ The build directory contains:
 environment - Sourced to set up environment variables.
 run         - Script to run a project executable.
 Buboptions  - Contains variables from config file.
+repos
+  symlinks to the source repos
 src
-  symlinks-to-source-dirs
+  symlinks to source dirs
 obj
-  dirs-matching-source-dir-tree
-    intermediate-build-artifacts
+  dirs matching source dir tree
+    intermediate build artifacts
 tmp
   assorted temporary files
 priv
-  dirs-matching-source-dir-tree
-    private-finished-build-artifacts
+  dirs matching source dir tree
+    private finished build artifacts
 dist
   lib  - Contains public static libraries and all dynamic libraries.
   bin  - Contains executables and scripts.
@@ -220,22 +199,22 @@ and '}' can only be used to terminate a braced section.
 The braced text is ignored unless ARCHITECTURE contains the specified value. For example, if
 
 bub.cfg contains:
-  ARCHITECTURE = Windows Mingw
+  ARCHITECTURE = Posix
 
 and a Bubfile contains:
   static-lib foo :
                    header1.h header2.h
                  :
                    body1.cc
-                   [Windows]{ windows_body2.cc }
-                   [Posix]  { posix_body2.cc   }
+                   [Posix] { posix_body2.cc }
+                   [Linux] { linux_extras_body2.cc   }
                  ;
 
-  [Mingw] {
-      misc windows_docco.rst;
+  [Linux] {
+      misc linux_docco.rst;
   }
 
-then the Windows and Mingw parts are present, but the Posix part is not.
+then the Posix part is present, but the Linux parts are not.
 
 Conditionals cannot be nested.
 
@@ -266,22 +245,27 @@ public-lib lib-name : public-source : protected-source [: required-sys-libs];
 
 eg: static-lib math : matrix.h alg.h : matrix.cpp alg.cpp : m;
 
+Specifies a static library. All the source files should be in the same language,
+or in a language from which the library's language files can be generated.
+Exceptions:
+* .c files can mix with others.
+* Files without configured build commands (eg header files) can mix with others.
+
 The order of the listed files should be in dependency order, but that is only
 required if some of the library's source files are generated within the library.
 
 A static lib has to contain at least one object file generated from the listed
 source files.
 
-The sys-libs should be listed in dependency order (lowest level first).
-Only sys-libs not already pulled in by other dependencies need by listed.
-For example, some higher-level library that depends on math doesn't need to
-specify that it requires sys-lib m.
+Specifying a required-syslib has two effects:
 
-Specifies a static library. All the source files should be in the same language,
-or in a language from which the library's language files can be generated.
-Exceptions:
-* .c files can mix with others.
-* Files without configured build commands (eg header files) can mix with others.
+* This library's object file build commands will have the syslib's compile flags
+  that were specified in the configuration file.
+
+* The link commands for anything that depends on this library will contain the
+  syslib's link flags that were specified in the configuration file.
+
+sys-libs should be listed in dependency order (lowest level first).
 
 The public files are those that client code can import/include.
 
@@ -302,7 +286,7 @@ eg: dynamic-lib tools : tools;
 
 Dynamic libs contain all the object files contained in the specified static libs.
 Executables defined after a dynamic library will link to the dynamic library
-rather than the static library.
+rather than static libraries contained by the dynamic-lib.
 
 The order of the specified static libs is unimportant.
 
@@ -323,7 +307,7 @@ or, if you want to do it in full, which you must if the names don't match:
 
 dynamic-lib one : two/two three/three;
 
-Note that a directory can contain any number of static and dynamic directories.
+Note that a directory can contain any number of static and dynamic libraries.
 
 
 Executable
@@ -335,9 +319,7 @@ priv-exe exe-name : source [: required-sys-libs];
 
 eg: test-exe math-test : math_test.cpp;
 
-As with static libraries, only sys-libs not already pulled in by other
-dependencies need by listed. Any that are present should be in dependency
-order (lowest level first).
+See static-lib for the meaning of required-syslibs.
 
 dist-exe places the built executable in the dist/bin directory.
 
@@ -388,15 +370,15 @@ you can't sneak an invalid dependency in while no-one is looking.
 Rules
 -----
 
-Dependencies are deduced from information in generated dependency files via
+Dependencies are deduced from information in generated dependency files by
 using ${DEPS} in commands, and also from containment/dependency information
 in Bubfiles.
 
 File A is allowed to depend on file B if all of the following are true:
 
-* A is defined later than B, or B is a descendant of A.
+* A is defined later than B.
 
-* A's package is not a descendant of B's package (both in the same package is ok).  
+* A's package is not a descendant of B's package (both in the same package is ok).
 
 * B is visible.
 

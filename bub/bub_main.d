@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2016, Graham St Jack.
+ * Copyright 2012-2017, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -37,8 +37,10 @@ Refer to README and INSTRUCTIONS and examples for details on how to use bub.
 */
 
 import bub.planner;
+import bub.parser;
 import bub.worker;
 import bub.support;
+import bub.backtrace;
 
 import std.file;
 import std.getopt;
@@ -104,13 +106,13 @@ int main(string[] args) {
             numJobs = 20;
         }
         if (returnValue != 0 || help) {
-            say("Usage:  bub [options]\n"
-                "  --statements     print statements\n"
-                "  --deps           print dependencies\n"
-                "  --actions        print actions\n"
-                "  --details        print heaps of details\n"
-                "  --jobs=VALUE     maximum number of simultaneous actions\n"
-                "  --help           show this message\n"
+            say("Usage:  bub [options]\n" ~
+                "  --statements     print statements\n" ~
+                "  --deps           print dependencies\n" ~
+                "  --actions        print actions\n" ~
+                "  --details        print heaps of details\n" ~
+                "  --jobs=VALUE     maximum number of simultaneous actions\n" ~
+                "  --help           show this message\n" ~
                 "target is everything contained in the project Bubfile and anything referred to.");
             return returnValue;
         }
@@ -141,6 +143,30 @@ int main(string[] args) {
             }
         }
 
+        // Ensure tmp exists so the workers have a sandbox.
+        if (!exists("tmp")) {
+            mkdir("tmp");
+        }
+
+        // set up some globals
+        readOptions();
+        g_print_rules   = printStatements;
+        g_print_deps    = printDeps;
+        g_print_details = printDetails;
+
+        // Run the pre-build script if one is specified
+        auto preBuild = getOption("PRE_BUILD");
+        if (preBuild.length > 0) {
+            string command = preBuild;
+            foreach (arg; args) {
+                command ~= " " ~ arg;
+            }
+            auto rc = executeShell(command);
+            if (rc.status != 0) {
+                fatal("%s failed with: %s", command, rc.output);
+            }
+        }
+
         // Spawn the bailer and workers
         spawn(&doBailer);
         Tid[] workerTids;
@@ -149,7 +175,7 @@ int main(string[] args) {
         }
 
         // Build everything
-        if (!doPlanning(workerTids, printStatements, printDeps, printDetails)) {
+        if (!doPlanning(workerTids)) {
             returnValue = 1;
         }
     }

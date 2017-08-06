@@ -1,6 +1,6 @@
 misc transmogrify : bin;
 
-static-lib low : macros.h : macros.cpp ;
+static-lib low : macros.h : macros.cpp : dl;
 
 public-lib mid :
                 one.h two.H

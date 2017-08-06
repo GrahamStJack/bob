@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2016, Graham St Jack.
+ * Copyright 2012-2017, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -71,6 +71,7 @@ final class SysLib {
         name   = name_;
         number = nextNumber++;
         if (name in byName) fatal("Duplicate SysLib name %s", name);
+        if (name !in sysLibDefinitions) fatal("System library %s is not defined in the cfg file", name);
         byName[name] = this;
     }
 
@@ -109,7 +110,7 @@ final class SysLib {
 //
 // * Just after all the object files to be directly incorporated into a dynamic
 //   library or executable are up to date, the then-current dependencies of those
-//   object files are used to determie which libraries to link with. That is, it
+//   object files are used to determine which libraries to link with. That is, it
 //   establishes new dependencies on the libraries, which may cause the build of
 //   the dynamic library or executable to be delayed.
 //
@@ -121,17 +122,21 @@ class DependencyCache {
     string[][string] dependencies;
 
     this() {
+        executeShell("rm DEPENDENCIES-*");
         string path = "dependency-cache";
         if (path.exists) {
             foreach (line; path.readText.splitLines) {
                 auto tokens = line.split;
 
                 string   file = tokens[0];
-                string[] deps = tokens[1..$]; 
+                string[] deps = tokens[1..$];
 
                 dependencies[file] = deps;
             }
-            path.remove;
+            path.rename("dependency-cache.old");
+        }
+        else {
+            say("dependency-cache is missing");
         }
     }
 
@@ -172,15 +177,16 @@ final class Action {
     static PriorityQueue!Action queue;
 
     Origin   origin;
-    string   name;      // The name of the action
-    string   command;   // The action command-string
-    int      number;    // Influences build order
-    File[]   inputs;    // The files that constitute this action's INPUT
-    File[]   builds;    // Files that constitute this action's OUTPUT
-    File[]   depends;   // Files that the action depend on
-    long     newest;    // The modification time of the newest system file depended on
-    string[] libs;      // The contents of this action's LIBS
-    bool     issued;    // True if the action has been issued to a worker
+    string   name;        // The name of the action
+    string   command;     // The action command-string
+    int      number;      // Influences build order
+    File[]   inputs;      // The files that constitute this action's INPUT
+    File[]   builds;      // Files that constitute this action's OUTPUT
+    File[]   depends;     // Files that the action depend on
+    long     newest;      // The modification time of the newest system file depended on
+    string[] libs;        // The contents of this action's LIBS
+    string[] sysLibFlags; // The flags to tack on because of syslibs that are depended on
+    bool     issued;      // True if the action has been issued to a worker
 
     this(Origin origin_, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
         origin  = origin;
@@ -192,7 +198,7 @@ final class Action {
         errorUnless(name !in byName, origin, "Duplicate command name=%s", name);
         byName[name] = this;
 
-        foreach (dep; inputs_) {
+        foreach (dep; inputs) {
             addDependency(dep);
         }
 
@@ -211,18 +217,20 @@ final class Action {
             }
         }
 
-        // Add cached dependencies. Note that we assume that all of the built
+        // Add cached dependencies. Note that we assume that all of this action's built
         // files have the same dependencies, and treat the cached dependencies with
         // some suspicion/leniency, as they can be out of date.
         auto dependPaths = builds[0].path in File.cache.dependencies;
         if (dependPaths !is null && dependPaths.length > 0) {
             foreach (dependPath; *dependPaths) {
-                if (!dependPath.isAbsolute) {
+                if (!dependPath.isAbsolute && dependPath.dirName != ".") {
                     if (dependPath !in File.byPath) {
                         // Don't know about dependPath, or it refers to a file
                         // declared later. This is normal, because the cached dependencies
                         // can become invalidated by Bubfile changes, so just treat the
                         // built files as out of date.
+                        if (g_print_deps) say("Don't have up to date dependencies for %s - " ~
+                                              "treating as out of date", builds[0]);
                         newest = long.max;
                         break;
                     }
@@ -250,8 +258,9 @@ final class Action {
                 }
             }
         }
-        else {
-            // Unknown dependencies, so we are out of date
+        else if (inputs.length > 0) {
+            // We have input files with unknown dependencies, so we are out of date
+            if (g_print_deps) say("Dependencies of %s are unknown - treating it as out of date", builds[0]);
             newest = long.max;
         }
     }
@@ -269,10 +278,14 @@ final class Action {
             depends ~= depend;
             added = true;
         }
-        if (added && builds.length != 1) {
-            fatal("cannot add a dependency to an action that builds more than one file: %s", name);
-        }
         return added;
+    }
+
+    void addLaterDependency(File depend) {
+        bool added = addDependency(depend);
+        if (added && builds.length > 1) {
+           fatal("Cannot add a later dependency to an action that builds more than one file: %s", name);
+        }
     }
 
     // Flag this action as generating source files
@@ -293,20 +306,30 @@ final class Action {
                 nextGenerateIndex < generateNumbers.length ?
                 generateNumbers[nextGenerateIndex] :
                 int.max;
+            File[] candidates;
             foreach (file, dummy; File.outstanding) {
-                if (file.action &&
+                if (file.action !is null &&
                     !file.action.issued &&
                     file.action.number <= fence)
                 {
-                    file.issueIfReady();
+                    candidates ~= file;
                 }
+            }
+            foreach (file; candidates) {
+                file.issueIfReady();
             }
         }
     }
 
-    // Set the ${LIBS} that this action will use
-    void setLibs(string[] libs_) {
-        libs = libs_;
+    // Set the ${LIBS} that this action will use, and any flags that are requested because of syslibs depended on
+    void setLibs(string[] libs_, string[] sysLibLinkFlags) {
+        libs        = libs_;
+        sysLibFlags = sysLibLinkFlags;
+    }
+
+    // Set the syslib compile flags that this action will use
+    void setSysLibCompileFlags(string[] sysLibCompileFlags) {
+        sysLibFlags = sysLibCompileFlags;
     }
 
     // Return the path of any ${DEPS} file this action will use
@@ -351,7 +374,7 @@ final class Action {
             extras["LIBS"] = strip(value);
         }
 
-        command = resolveCommand(command, extras);
+        command = resolveCommand(command, extras, sysLibFlags);
 
         queue.insert(this);
     }
@@ -531,7 +554,7 @@ class File : Node {
 
     long       modTime;     // the modification time of this file
     bool       used;        // true if this file has been used already
-    bool       augmented;   // true if augmentAction() has already been called
+    bool       augmented;   // true if augmentAction() has already been called and returned true
     bool[File] dependedBy;  // Files that depend on this
 
     // return a prospective path to a potential file.
@@ -577,7 +600,7 @@ class File : Node {
             errorUnless(!file.used, origin, "%s has already been used", path1);
             return *file;
         }
-        else if (exists(path2)) {
+        else if (path2.exists) {
             // a source file under src
             return new File(origin, parent, name, privacy, path2, false);
         }
@@ -603,7 +626,8 @@ class File : Node {
         bool[string] isInput;
         foreach (input; inputs) isInput[input] = true;
         foreach (dep; deps) {
-            if (!dep.isAbsolute && dep !in isInput) {
+            if (!dep.isAbsolute && dep.dirName != "." && dep !in isInput) {
+                // dep is an in-project source file that isn't one of the inputs
                 File* depend = dep in File.byPath;
                 errorUnless(depend !is null, origin, "%s depends on unknown '%s'", this, dep);
                 if (g_print_deps && this !in depend.dependedBy) {
@@ -618,14 +642,14 @@ class File : Node {
     }
 
     // Mark this file as up to date
-    void upToDate() {
+    final void upToDate() {
         auto act = action;
         action = null;
-        act.done();
         outstanding.remove(this);
 
+        act.done();
+
         // Actions that depend on this may be able to be issued now
-        if (g_print_deps) say("Checking files that depend on %s: %s", this, dependedBy.keys);
         foreach (other; dependedBy.keys) {
             other.issueIfReady();
         }
@@ -634,7 +658,7 @@ class File : Node {
     // Advance this file's action through its states:
     // waiting-to-issue-action, action-issued, up-to-date
     final void issueIfReady() {
-        if (action && !action.issued) {
+        if (action !is null && !action.issued) {
             bool wait;
             bool dirty = action.newest > modTime;
             if (dirty && g_print_deps) say("%s system dependencies are younger", this);
@@ -644,7 +668,7 @@ class File : Node {
             {
                 // Wait even though this file might already be up to date,
                 // as it is cheaper to do this check than the depend one, and
-                // this function may be called many times. 
+                // this function may be called many times.
                 wait = true;
                 if (g_print_deps) say("%s [%s] waiting for generated files", path, action.number);
             }
@@ -659,23 +683,22 @@ class File : Node {
                         if (depend.modTime > modTime) {
                             if (g_print_deps) say("%s dependency %s is younger", this, depend);
                             dirty = true;
+                            // Don't break here, because other dependencies may force us to wait
                         }
                     }
                 }
                 if (!wait && g_print_deps) say("%s dependencies are up to date", this);
 
                 if (!wait && !augmented) {
-                    // All or initial dependencies are satisfied and we haven't yet updated
-                    // our dependencies from the now-updated cache - do so now.
-                    augmented = true;
-                    if (augmentAction()) {
-                        if (g_print_deps) say("%s dependencies augmented - rechecking", this);
-                        issueIfReady();
-                        return;
-                    }
+                    // All our currently known dependencies are satisfied but we aren't yet sure
+                    // we know what all our dependencies are - add any more that we can now,
+                    // and go around again to check if we can issue our action yet.
+                    augmented = augmentAction();
+                    issueIfReady();
+                    return;
                 }
             }
-            if (!wait) { 
+            if (!wait) {
                 if (dirty) {
                     // Out of date - issue the action
                     action.issue();
@@ -689,19 +712,19 @@ class File : Node {
         }
     }
 
+    // Update this File's dependencies, returning true if all dependencies are now known.
+    // Called when the last of this File's currently known dependencies are up to date.
+    // Once true is returned, it isn't called again.
+    //
     // File specialisations that use the DependencyCache to determine things like
     // dependencies on libraries and what libraries to link with should specialise
-    // this function. It will be called once, when all of the File's explicitly-stated
-    // dependencies are up to date, and thus all of the DependencyCache entries this
-    // File cares about are up to date.
-    //
-    // Return true if a new dependency has been added.
+    // this function.
     bool augmentAction() {
-        return false;
+        return true;
     }
 
     // Check that this file can depend on other
-    void checkCanDepend(File other) {
+    final void checkCanDepend(File other) {
         Pkg  thisPkg        = Pkg.getPkgOf(this);
         Pkg  otherPkg       = Pkg.getPkgOf(other);
         Node commonAncestor = commonAncestorWith(other);
@@ -814,10 +837,22 @@ abstract class Binary : File {
                 errorUnless(obj !in byContent, origin, "%s already used", obj.path);
                 byContent[obj] = this;
 
-                string actionName = format("%-15s %s", "Compile", sourceFile.path);
+                string actionName = format("%-15s %s", "Compile", obj.path);
 
                 obj.action = new Action(origin, pkg, actionName, *compile,
                                         [obj], [sourceFile]);
+
+                // Set additional compiler flags for syslibs this binary explicitly requires.
+                bool[string] flags;
+                foreach (lib, dummy; reqSysLibs) {
+                    auto definition = lib.name in sysLibDefinitions;
+                    foreach (flag; definition.compileFlags) {
+                        if (flag !in flags && flag != "-std=c++11") {
+                            flags[flag] = true;
+                        }
+                    }
+                }
+                obj.action.setSysLibCompileFlags(flags.keys);
             }
             else if (generate) {
                 // Generate more source files from sourceFile.
@@ -858,14 +893,14 @@ abstract class Binary : File {
                     origin,
                     "binary must have at least one source file");
 
+        foreach (sysLibName; sysLibs) {
+            reqSysLibs[SysLib.get(sysLibName)] = true;
+        }
         foreach (source; publicSources) {
             addSource(source, Privacy.PUBLIC);
         }
         foreach (source; protectedSources) {
             addSource(source, Privacy.PROTECTED);
-        }
-        foreach (sysLibName; sysLibs) {
-            reqSysLibs[SysLib.get(sysLibName)] = true;
         }
     }
 }
@@ -902,13 +937,18 @@ final class StaticLib : Binary {
         // Super-constructor takes care of code generation and compiling to object files.
         super(origin, pkg, name_, _path, publicSources, protectedSources, sysLibs);
 
-        errorUnless(objs.length > 0, origin, "A static lib must have at leasy one object file");
-
         // Set up the library's action.
-        string  actionName = format("%-15s %s", "StaticLib", path);
-        string* command    = sourceExt in slibCommands;
-        errorUnless(command !is null, origin, "No static lib command for '%s'", sourceExt);
-        action = new Action(origin, pkg, actionName, *command, [this], objs);
+        if (objs.length == 0) {
+            string actionName = format("%-15s %s", "empty-lib", path);
+            string command    = "DUMMY " ~ path;
+            action = new Action(origin, pkg, actionName, command, [this], objs);
+        }
+        else {
+            string  actionName = format("%-15s %s", "StaticLib", path);
+            string* command    = sourceExt in slibCommands;
+            errorUnless(command !is null, origin, "No static lib command for '%s'", sourceExt);
+            action = new Action(origin, pkg, actionName, *command, [this], objs);
+        }
 
         if (isPublic) {
             // This library's public sources are distributable, so we copy them into dist/include
@@ -942,82 +982,99 @@ final class StaticLib : Binary {
 //
 // * If preventStaticLibs, StaticLibs aren't allowed as new dependencies.
 //
+// Returns true if dependencies are complete.
+//
 bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
 
     StaticLib[]  staticLibs;
     DynamicLib[] dynamicLibs;
     SysLib[]     sysLibs;
     bool[Object] done;
+    bool         complete = true;
 
-    void accumulate(File obj) {
-        string[] paths = File.cache.dependencies[obj.path];
-        foreach (path; paths) {
-            if (!path.isAbsolute) {
-                File file = File.byPath[path];
-                if (file !in done) {
-                    done[file] = true;
+    void accumulate(File file) {
+        if (file !in done) {
+            done[file] = true;
+            auto binary = file in Binary.byContent;
+            errorUnless(binary !is null, file.origin,
+                        "%s depends on %s, which isn't contained by something", target, file);
 
-                    auto binary = file in Binary.byContent;
-                    errorUnless(binary !is null, file.origin,
-                                "%s depends on %s, which isn't contained by something", obj, file); 
+            if (*binary !in done) {
+                done[*binary] = true;
 
-                    if (*binary !in done) {
-                        // Add all the binary's sysLibs
-                        foreach (lib, dummy; binary.reqSysLibs) {
-                            if (lib !in done) {
-                                done[lib] = true;
-                                sysLibs ~= lib;
-                            }
+                // Add all the binary's sysLibs
+                foreach (lib, dummy; binary.reqSysLibs) {
+                    if (lib !in done) {
+                        done[lib] = true;
+                        sysLibs ~= lib;
+                    }
+                }
+
+                if (*binary !is target) {
+                    // Must be a StaticLib
+                    auto slib = cast(StaticLib*) binary;
+                    errorUnless(slib !is null, binary.origin, "Expected %s to be a StaticLib", binary);
+
+                    // Add this slib, or the dynamic lib that contains it
+                    auto dlib = *slib in DynamicLib.byContent;
+                    bool usedDlib;
+                    if (dlib is null || dlib.number > target.number) {
+                        errorUnless(!preventStaticLibs || slib.objs.length == 0, target.origin,
+                                "%s cannot link with static lib %s", target, *slib);
+                        target.action.addLaterDependency(*slib);
+                        if (slib.objs.length > 0) {
+                            staticLibs ~= *slib;
                         }
+                    }
+                    else if (*dlib !in done && *dlib !is target) {
+                        done[*dlib] = true;
 
-                        if (*binary !is target && *binary !in done) {
-                            done[*binary] = true;
+                        usedDlib = true;
+                        target.action.addLaterDependency(*dlib);
+                        dynamicLibs ~= *dlib;
+                    }
 
-                            // Must be a StaticLib
-                            auto slib = cast(StaticLib*) binary;
-                            errorUnless(slib !is null, binary.origin, "Expected %s to be a StaticLib", binary);
-
-                            // Add this slib, or the dynamic lib that contains it
-                            auto dlib = *slib in DynamicLib.byContent;
-                            bool usedDlib;
-                            if (dlib is null || dlib.number > target.number) {
-                                errorUnless(!preventStaticLibs, target.origin,
-                                            "%s cannot link with static lib %s", target, *slib);
-                                target.action.addDependency(*slib);
-                                staticLibs ~= *slib;
-                            }
-                            else if (*dlib !in done && *dlib !is target) {
-                                done[*dlib] = true;
-
-                                usedDlib = true;
-                                target.action.addDependency(*dlib);
-                                dynamicLibs ~= *dlib;
-                            }
-
-                            if (usedDlib) {
-                                // Accumulate all the dependencies of all the contained static libs
-                                foreach (containedSlib; dlib.staticLibs) {
-                                    foreach (libObj; containedSlib.objs) {
-                                        accumulate(libObj);
-                                    }
-                                }
-                            }
-                            else {
-                                // Accumulate all the dependencies of the static lib
-                                foreach (libObj; slib.objs) {
-                                    accumulate(libObj);
-                                }
+                    if (usedDlib) {
+                        // Accumulate all the dependencies of all the contained static libs' objs
+                        foreach (containedSlib; dlib.staticLibs) {
+                            foreach (libObj; containedSlib.objs) {
+                                accumulate(libObj);
                             }
                         }
                     }
+                    else {
+                        // Accumulate all the dependencies of the static lib
+                        foreach (libObj; slib.objs) {
+                            accumulate(libObj);
+                        }
+                    }
                 }
+            }
+
+            auto paths = file.path in File.cache.dependencies;
+            if (paths) {
+                foreach (path; *paths) {
+                    if (!path.isAbsolute && path.dirName != ".") {
+                        accumulate(File.byPath[path]);
+                    }
+                }
+            }
+            else if (file.action) {
+                if (g_print_deps) {
+                    say("Augmentation of %s incomplete because %s is not built yet", target, file);
+                }
+                complete = false;
             }
         }
     }
 
     foreach (obj; objs) {
         accumulate(obj);
+        if (!complete) {
+            break;
+        }
     }
+
     staticLibs.sort();
     dynamicLibs.sort();
     sysLibs.sort();
@@ -1025,12 +1082,35 @@ bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
     string[] libs;
     foreach (lib; staticLibs)  libs ~= lib.uniqueName;
     foreach (lib; dynamicLibs) libs ~= lib.uniqueName;
-    foreach (lib; sysLibs)     libs ~= lib.name;
 
-    if (g_print_details) say("%s libs = %s", target, libs);
-    target.action.setLibs(libs);
+    // Put together the link flags needed by all the sysLibs this Binary needs,
+    // eliminating duplicates while preserving order, which is highest to lowest.
+    string[]    sysLibFlags;
+    int[string] flagCounts;
+    foreach (lib; sysLibs) {
+        foreach (flag; sysLibDefinitions[lib.name].linkFlags) {
+            if (flag !in flagCounts) {
+                flagCounts[flag] = 0;
+            }
+            flagCounts[flag] = flagCounts[flag] + 1;
+        }
+    }
+    foreach (lib; sysLibs) {
+        foreach (flag; sysLibDefinitions[lib.name].linkFlags) {
+            if (flagCounts[flag] == 1) {
+                sysLibFlags ~= flag;
+            }
+            flagCounts[flag] = flagCounts[flag] - 1;
+        }
+    }
 
-    return staticLibs.length + dynamicLibs.length > 0;
+    target.action.setLibs(libs, sysLibFlags);
+
+    if (g_print_deps) {
+        say("Augmented action of %s, complete=%s libs=%s syslibs=%s", target, complete, libs, sysLibFlags);
+    }
+
+    return complete;
 }
 
 
@@ -1099,6 +1179,7 @@ final class DynamicLib : File {
                 objs ~= obj;
             }
         }
+        errorUnless(objs.length > 0, origin, "A dynamic library must have at least one object file");
         action = new Action(origin, pkg, actionName, *command, [this], objs);
     }
 
@@ -1355,18 +1436,7 @@ void cleandirs() {
 //
 // Planner function
 //
-bool doPlanning(Tid[] workerTids, bool printStatements, bool printDeps, bool printDetails) {
-
-    // Ensure tmp exists so the workers have a sandbox.
-    if (!exists("tmp")) {
-        mkdir("tmp");
-    }
-
-    // set up some globals
-    readOptions();
-    g_print_rules   = printStatements;
-    g_print_deps    = printDeps;
-    g_print_details = printDetails;
+bool doPlanning(Tid[] workerTids) {
 
     // Load the dependency cache
     File.cache = new DependencyCache();
@@ -1388,6 +1458,7 @@ bool doPlanning(Tid[] workerTids, bool printStatements, bool printDeps, bool pri
                 file.issueIfReady();
             }
         }
+        say("Issued %s initial actions with %s outstanding", Action.queue.length, File.outstanding.length);
 
         // A queue of idle worker indexes. A PriorityQueue is overkill, but it is easy to use...
         PriorityQueue!uint idle;
@@ -1414,7 +1485,7 @@ bool doPlanning(Tid[] workerTids, bool printStatements, bool printDeps, bool pri
             }
 
             if (idle.length == workerTids.length) {
-                fatal("Nothing to do with %s outstanding and no inflight actions - "
+                fatal("Nothing to do with %s outstanding and no inflight actions - " ~
                       "something is wrong",
                       File.outstanding.length);
             }
@@ -1446,12 +1517,15 @@ bool doPlanning(Tid[] workerTids, bool printStatements, bool printDeps, bool pri
     if (!File.outstanding.length) {
 
         // Print some statistics and report success.
-        say("\n"
-            "Total number of files:             %s\n"
-            "Number of target files:            %s\n"
-            "Number of files updated:           %s\n",
+        say("\n" ~
+            "Total number of files:   %s\n" ~
+            "Number of target files:  %s\n" ~
+            "Number of files updated: %s\n",
             File.byPath.length, File.numBuilt, File.numUpdated);
         return true;
+    }
+    else {
+        say("\nBuild terminated with %s outstanding targets.\n", File.outstanding.length);
     }
 
     // Report failure.
