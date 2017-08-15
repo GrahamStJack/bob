@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2013, Graham St Jack.
+ * Copyright 2012-2017, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -99,7 +99,9 @@ version(Windows) {
 //
 // Storage for data read from the config file
 //
-alias string[][string] Vars;
+
+alias string[][string] Vars;      // variable items by variable name
+alias string[string]   Locations; // path by name
 
 
 //
@@ -166,7 +168,7 @@ string toEnv(string envName, const ref Vars vars, string[] varNames, string[] ex
     if (result[$-ENV_DELIM.length..$] == ENV_DELIM) {
         result = result[0..$-ENV_DELIM.length];
     }
-    result ~= "\"\n"; 
+    result ~= "\"\n";
     return result;
 }
 
@@ -200,9 +202,14 @@ void update(string path, string content, bool executable) {
 //
 // Set up build directory.
 //
-void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
+void establishBuildDir(string          buildDir,
+                       string          srcDir,
+                       const           Vars vars,
+                       const Locations repos,
+                       const Locations packages,
+                       const string[]  pkgNames) {
 
-    // Create build directory.
+    // Create build directory
     if (!exists(buildDir)) {
         mkdirRecurse(buildDir);
     }
@@ -212,7 +219,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     }
 
 
-    // Create Buboptions file from vars.
+    // Create Buboptions file from vars
     string bubText;
     foreach (string var; vars.keys().sort()) {
         const string[] tokens = vars[var];
@@ -268,7 +275,7 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
             "#!/bin/bash\n" ~
             "source environment\n" ~
             "export TMP_PATH=\"tmp/tmp-$(basename \"${1}\")\"\n" ~
-            "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec \"$@\"";
+            "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec \"$@\"\n";
         update(buildPath(buildDir, "run"), runText, true);
     }
     version(Windows) {
@@ -294,40 +301,24 @@ void establishBuildDir(string buildDir, string srcDir, const Vars vars) {
     }
     mkdir(localSrcPath);
 
-    assert("REPOS"   in vars && vars["REPOS"].length,   "REPOS variable is not set");
-    assert("ROOTS"   in vars && vars["ROOTS"].length,   "ROOTS variable is not set");
-    assert("CONTAIN" in vars && vars["CONTAIN"].length, "CONTAIN variable is not set");
-
     // Make symbolic links to each repo
-    foreach (relPath; vars["REPOS"]) {
-        auto repoPath = buildNormalizedPath(srcDir, relPath).absolutePath;
-        auto repoName = repoPath.baseName;
-        makeSymlink(repoPath, buildPath(localReposPath, repoName));
+    foreach (name, path; repos) {
+        auto repoPath = buildNormalizedPath(srcDir, path).absolutePath;
+        makeSymlink(repoPath, buildPath(localReposPath, name));
     }
 
-    // Make a symbolic link to each top-level package specified in CONTAIN, and looked
-    // for in all of ROOTS - then write the project Bubfile.
-    string[string] pkgPaths;
-    string contain;
-    foreach (name; vars["CONTAIN"]) {
-        contain ~= " " ~ name;
-        string pkgPath;
-        foreach (repo; vars["ROOTS"]) {
-            auto candidate = buildPath(repo, name);
-            if (candidate.exists) {
-                assert(pkgPath is null, format("%s found in both %s and %s", name, pkgPath, candidate));
-                pkgPath = candidate;
-            }
-        }
-        assert(pkgPath !is null, format("Could not find %s in any of %s", name, vars["ROOTS"]));
-        pkgPaths[name] = pkgPath;
-    }
-    foreach (name, path; pkgPaths) {
+    // Make a symbolic link to each top-level package
+    foreach (name, path; packages) {
         makeSymlink(buildNormalizedPath(srcDir, path), buildPath(localSrcPath, name));
     }
 
     // Create the top-level Bubfile
-    update(buildPath(localSrcPath, "Bubfile"), "contain" ~ contain ~ ";", false);
+    string contain = "contain";
+    foreach (name; pkgNames) {
+        contain ~= " " ~ name;
+    }
+    contain ~= ";\n";
+    update(buildPath(localSrcPath, "Bubfile"), contain, false);
 
     // print success
     writefln("Build environment in %s is ready to roll.", buildDir);
@@ -371,9 +362,89 @@ string evaluate(string text) {
 
 
 //
-// Parse the config file, returning the variable definitions it contains.
+// Parse a bundle file, which can only contain REPOS, ROOTS and CONTAIN variables and no sections.
 //
-Vars parseConfig(string configFile, string mode) {
+// bundleFile is the path to the bundle file relative to the config file.
+// Paths in the bundle file are relative to the bundle file's parent directory.
+//
+void parseBundle(string           bundle,
+                 ref Locations    repos,
+                 ref Locations    packages,
+                 ref string[]     pkgNames,
+                 ref bool[string] bundlesDone) {
+    if (bundle !in bundlesDone) {
+        bundlesDone[bundle] = true;
+        writefln("Incorporating bundle at %s", bundle);
+
+        string repo;
+        string root;
+
+        foreach (string line; bundle.readText.splitLines) {
+            if (!line.length || line[0] == '#') continue;
+
+            string[] tokens = split(line, " =");
+            if (tokens.length == 2) {
+                auto name  = tokens[0].strip;
+                auto items = tokens[1].split;
+
+                enforce(name == "BUNDLES" || name == "REPO" || name == "ROOT" || name == "CONTAIN",
+                        "A bundle file can only contain BUNDLES, REPO, ROOT or CONTAIN variables - not '" ~ name ~ "'");
+
+                if (name == "BUNDLES") {
+                    foreach (item; items) {
+                        parseBundle(buildNormalizedPath(bundle.dirName, item), repos, packages, pkgNames, bundlesDone);
+                    }
+                }
+                else if (name == "REPO") {
+                    enforce(repo == "", "Only one REPO variable is allowed per bundle file");
+                    enforce(items.length == 1, "Exactly one value must be provided in a REPO variable");
+                    if (items[0] !in repos) {
+                        repo = buildNormalizedPath(bundle.dirName, items[0]);
+                        enforce(repo.isDir,
+                                "Can't find dir " ~ repo ~
+                                " - REPO value must be relative path to a repo directory " ~ repo);
+                        repos[repo.baseName] = repo;
+                        writefln("Added repo %s at %s", repo.baseName, repo);
+                    }
+                }
+                else if (name == "ROOT") {
+                    enforce (root == "", "Only one ROOT variable allowed per bundle file");
+                    enforce(items.length == 1, "Exactly one value must be provided in a ROOT variable");
+                    enforce(repo != "", "Cannot specify ROOT before REPO");
+                    root = buildNormalizedPath(bundle.dirName, items[0]);
+                }
+                else if (name == "CONTAIN") {
+                    enforce(root != "", "Connot specify CONTAIN before ROOT");
+                    foreach (item; items) {
+                        enforce(item.dirName == ".", "CONTAIN values must be simple names");
+                        auto path = buildPath(root, item);
+                        enforce(path.isDir,
+                                "Can't find dir " ~ path ~
+                                " - CONTAIN values must be directory names under ROOT " ~ root);
+                        enforce(item !in packages, "Duplicate CONTAIN " ~ item);
+                        packages[item] = path;
+                        pkgNames ~= item;
+                        writefln("Contain top-level package %s at %s", item, path);
+                    }
+                }
+                else {
+                    enforce(false, "Unknown bundle variable '" ~ name ~ "'");
+                }
+            }
+        }
+    }
+}
+
+
+//
+// Parse the config file and any bundles referred to from it, returning the resultant variable definitions.
+//
+void parseConfig(string        configFile,
+                 string        mode,
+                 ref Vars      vars,
+                 ref Locations repos,
+                 ref Locations packages,
+                 ref string[]  pkgNames) {
 
     enum Section { none, defines, modes, syslibCompileFlags, syslibLinkFlags }
 
@@ -381,13 +452,13 @@ Vars parseConfig(string configFile, string mode) {
     bool    inMode;
     bool    foundMode;
     string  commandType;
-    Vars    vars;
     size_t  syslibNum;
 
     if (!exists(configFile)) {
         writefln("Could not file config file %s", configFile);
         exit(1);
     }
+    writefln("Using config file %s", configFile);
 
     string content = readText(configFile);
     foreach (string line; splitLines(content)) {
@@ -426,10 +497,6 @@ Vars parseConfig(string configFile, string mode) {
                     else if (!isWhite(line[0])) {
                         // We are in a mode, which might be the one we want.
                         inMode = strip(line) == mode;
-                        if (inMode) {
-                            foundMode = true;
-                            //writefln("Found mode %s", mode);
-                        }
                     }
                     else if (inMode) {
                         // Add to an existing variable
@@ -464,12 +531,15 @@ Vars parseConfig(string configFile, string mode) {
         }
     }
 
-    if (!foundMode) {
-        writefln("Could not find mode %s in config file", mode);
-        exit(1);
-    }
+    enforce("BUNDLES" in vars && vars["BUNDLES"].length, "BUNDLES variable is not set or is empty");
+    auto initialBundles = vars["BUNDLES"];
+    vars.remove("BUNDLES");
 
-    return vars;
+    // Transitively parse the bundle files
+    bool[string] bundlesDone;
+    foreach (bundle; initialBundles) {
+        parseBundle(bundle.absolutePath.buildNormalizedPath, repos, packages, pkgNames, bundlesDone);
+    }
 }
 
 
@@ -515,9 +585,15 @@ int main(string[] args) {
     // Read config file and establish build dir.
     //
 
-    Vars vars = parseConfig(configFile, mode);
+    Vars      vars;
+    Locations repos;
+    Locations packages;
+    string[]  pkgNames;
+
     vars["SRCDIR"] = [srcDir];
-    establishBuildDir(buildDir, srcDir, vars);
+
+    parseConfig(configFile, mode, vars, repos, packages, pkgNames);
+    establishBuildDir(buildDir, srcDir, vars, repos, packages, pkgNames);
 
     auto postConfigure = "POST_CONFIGURE" in vars;
     if (postConfigure) {

@@ -1,7 +1,7 @@
 # Makefile to build bottom-up-build with dmd on linux.
 
 DFLAGS = -g -w -wi -de -gs -O
-DMD = ldmd2
+DMD = dmd
 
 all : bin/bub bin/bub-config
 
