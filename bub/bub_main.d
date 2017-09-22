@@ -122,7 +122,7 @@ int main(string[] args) {
             printDeps = true;
         }
 
-        // Set environment variables found in the environment file
+        // Set environment variables found in the environment file so that workers get them
         if (exists("environment")) {
             string envContent = readText("environment");
             foreach (line; splitLines(envContent)) {
@@ -134,8 +134,9 @@ int main(string[] args) {
                     string name  = tokens[0];
                     string value = tokens[1];
 
-                    version(Windows) {
-                        name = name[4..$]; // strip off "set "
+                    auto tokens2 = name.split;
+                    if (tokens2.length > 1) {
+                        name = tokens2[1];
                     }
 
                     environment[name] = value;

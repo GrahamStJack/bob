@@ -399,7 +399,7 @@ final class Action {
 //
 
 // Additional constraint on allowed dependencies
-enum Privacy { PUBLIC, PROTECTED, PRIVATE }
+enum Privacy { PUBLIC, SEMI_PROTECTED, PROTECTED, PRIVATE }
 
 //
 // return the privacy implied by args
@@ -900,7 +900,7 @@ abstract class Binary : File {
             addSource(source, Privacy.PUBLIC);
         }
         foreach (source; protectedSources) {
-            addSource(source, Privacy.PROTECTED);
+            addSource(source, Privacy.SEMI_PROTECTED); // available within the library *and* package
         }
     }
 }
@@ -1020,7 +1020,9 @@ bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
                     bool usedDlib;
                     if (dlib is null || dlib.number > target.number) {
                         errorUnless(!preventStaticLibs || slib.objs.length == 0, target.origin,
-                                "%s cannot link with static lib %s", target, *slib);
+                                "A dynamic library (%s) cannot link with a static lib (%s) - " ~
+                                "put the static lib into a dynamic-lib",
+                                target, *slib);
                         target.action.addLaterDependency(*slib);
                         if (slib.objs.length > 0) {
                             staticLibs ~= *slib;
@@ -1232,7 +1234,7 @@ final class Exe : Binary {
             result.action = new Action(origin,
                                        pkg,
                                        format("%-15s %s", "TestResult", result.path),
-                                       format("TEST ./run %s", this.path),
+                                       format("TEST %s", this.path),
                                        [result],
                                        [this]);
         }
@@ -1458,7 +1460,6 @@ bool doPlanning(Tid[] workerTids) {
                 file.issueIfReady();
             }
         }
-        say("Issued %s initial actions with %s outstanding", Action.queue.length, File.outstanding.length);
 
         // A queue of idle worker indexes. A PriorityQueue is overkill, but it is easy to use...
         PriorityQueue!uint idle;
