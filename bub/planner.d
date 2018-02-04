@@ -186,6 +186,7 @@ final class Action {
     long     newest;      // The modification time of the newest system file depended on
     string[] libs;        // The contents of this action's LIBS
     string[] sysLibFlags; // The flags to tack on because of syslibs that are depended on
+    bool     completed;   // True if the action has been completed
     bool     issued;      // True if the action has been issued to a worker
 
     this(Origin origin_, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
@@ -295,12 +296,14 @@ final class Action {
 
     // Flag this action as done, attempting to issue any actions waiting on it
     void done() {
+        assert(completed);
         issued = true;
         if (nextGenerateIndex >= generateNumbers.length ||
             number == generateNumbers[nextGenerateIndex])
         {
             // This is the next generate action - attempt to issue any actions with numbers
-            // less than ours.
+            // less than ours, as this is the first time we can be sure that all the generated files
+            // those commands may be waiting for have been generated.
             if (nextGenerateIndex < generateNumbers.length) nextGenerateIndex++;
             int fence =
                 nextGenerateIndex < generateNumbers.length ?
@@ -334,10 +337,10 @@ final class Action {
 
     // Return the path of any ${DEPS} file this action will use
     string depsPath() {
-        return format("DEPENDENCIES-%s", number);
+        return buildPath("tmp", format("DEPENDENCIES-%s", number));
     }
 
-    // issue this action
+    // Complete this action.
     // Commands can contain any number of ${varname} instances, which are
     // replaced with the content of the named variable, cross-multiplied with
     // any adjacent text.
@@ -346,9 +349,9 @@ final class Action {
     //   DEPS   -> Path to a temporary dependencies file.
     //   OUTPUT -> Paths of the built files.
     //   LIBS   -> Names of all required libraries, without lib prefix or extension.
-    void issue() {
-        assert(!issued);
-        issued = true;
+    void complete() {
+        assert(!completed);
+        completed = true;
 
         string[string] extras;
         extras["DEPS"] = depsPath;
@@ -375,7 +378,13 @@ final class Action {
         }
 
         command = resolveCommand(command, extras, sysLibFlags);
+    }
 
+    // issue this action
+    void issue() {
+        assert(completed);
+        assert(!issued);
+        issued = true;
         queue.insert(this);
     }
 
@@ -699,6 +708,8 @@ class File : Node {
                 }
             }
             if (!wait) {
+                action.complete();
+                accumulateCompletedCommand(action);
                 if (dirty) {
                     // Out of date - issue the action
                     action.issue();
@@ -769,11 +780,11 @@ class File : Node {
 // given that sourceExt is already being used.
 string validateExtension(Origin origin, string newExt, string usingExt) {
     string result = usingExt;
-    if (usingExt == null || usingExt == ".c") {
+    if (!usingExt || usingExt == ".c") {
         result = newExt;
     }
     errorUnless(result == newExt || newExt == ".c", origin,
-                "Cannot use object file compiled from %s when already using %s",
+                "Cannot use object file compiled from '%s' when already using '%s'",
                 newExt, usingExt);
     return result;
 }
@@ -985,7 +996,6 @@ final class StaticLib : Binary {
 // Returns true if dependencies are complete.
 //
 bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
-
     StaticLib[]  staticLibs;
     DynamicLib[] dynamicLibs;
     SysLib[]     sysLibs;
@@ -1057,7 +1067,12 @@ bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
             if (paths) {
                 foreach (path; *paths) {
                     if (!path.isAbsolute && path.dirName != ".") {
-                        accumulate(File.byPath[path]);
+                        if (auto depend = path in File.byPath) {
+                            accumulate(*depend);
+                        }
+                        else {
+                            say("Ignoring dependency of %s on unknown file %s", file, path);
+                        }
                     }
                 }
             }
@@ -1436,6 +1451,58 @@ void cleandirs() {
 
 
 //
+// Compile commands that are written to file for use by other tools
+//
+
+string[string] completedCommands; // command text by the source file's path
+
+void accumulateCompletedCommand(Action action) {
+    assert(action.completed);
+    if (action.builds.length == 1 &&
+        action.builds[0].path.extension == ".o" &&
+        action.depends.length > 0)
+    {
+        // This command will be of interest to tools that want to grok the source - accumulate it
+        completedCommands[action.depends[0].path] = action.command;
+    }
+}
+
+void flushCompletedCommands() {
+    // The format is:
+    // [
+    // { "directory": "<dir-path>",
+    //   "command":   "<command>",
+    //   "file":      "<source-path>" },
+    //   ...
+    //  ]
+    string file = "compile_commands.json";
+    string tmp  = file ~ ".tmp";
+    string content;
+    string dir = getcwd;
+
+    content ~= "[";
+    bool first = true;
+    foreach (path, command; completedCommands) {
+        if (!first) {
+            content ~= ",";
+        }
+        content ~=
+            "\n" ~
+            "{ \"directory\": \"" ~ dir ~ "\",\n" ~
+            "  \"command\":   \"" ~ command ~ "\"\n" ~
+            "  \"file\":      \"" ~ path ~ "\" }";
+        first = false;
+    }
+    content ~= "\n]";
+
+    if (!file.exists || content != file.readText) {
+        tmp.write(content);
+        tmp.rename(file);
+    }
+}
+
+
+//
 // Planner function
 //
 bool doPlanning(Tid[] workerTids) {
@@ -1512,8 +1579,9 @@ bool doPlanning(Tid[] workerTids) {
     catch (BailException ex) {}
     catch (Exception ex) { say("Unexpected exception %s", ex); }
 
-    // Flush the dependency cache so we lock in any progress made
+    // Flush the dependency cache and completed commands so we lock in any progress made
     File.cache.flush();
+    flushCompletedCommands();
 
     if (!File.outstanding.length) {
 
