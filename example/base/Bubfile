@@ -5,8 +5,8 @@ static-lib low : macros.h : macros.cpp : dl;
 public-lib mid :
                 one.h two.H
                :
-                [Posix]   { one.c two.CPP }
-                [nothing] { this text ;: is ignored }
+                [Posix]   ( one.c two.CPP )
+                [nothing] ( this text ;: is ignored )
                ;
 
 test-exe test-one : test_one.cpp;

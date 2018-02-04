@@ -192,11 +192,11 @@ Conditional Bubfile content
 A Bubfile can contain configuration-dependent parts via the ARCHITECTURE
 variable defined in the configuration file, like so:
 
-[value] { content }
+[value] ( content )
 
-Where whitespace is not significant, and only whitespace can appear between ']' and '{',
-and '}' can only be used to terminate a braced section.
-The braced text is ignored unless ARCHITECTURE contains the specified value. For example, if
+Where whitespace is not significant, and only whitespace can appear between ']' and '(',
+and ')' can only be used to terminate a bracketed section.
+The bracketed text is ignored unless ARCHITECTURE contains the specified value. For example, if
 
 bub.cfg contains:
   ARCHITECTURE = Posix
@@ -206,13 +206,13 @@ and a Bubfile contains:
                    header1.h header2.h
                  :
                    body1.cc
-                   [Posix] { posix_body2.cc }
-                   [Linux] { linux_extras_body2.cc   }
+                   [Posix] ( posix_body2.cc )
+                   [Linux] ( linux_extras_body2.cc )
                  ;
 
-  [Linux] {
-      misc linux_docco.rst;
-  }
+  [Linux] (
+      translate linux_docco.rst;
+  )
 
 then the Posix part is present, but the Linux parts are not.
 
@@ -336,23 +336,57 @@ if necessary. The temporary directory is deleted if the test passes.
 Scripts, data and docs
 ~~~~~~~~~~~~~~~~~~~~~~
 
-misc names [: dist-destination-path]
+translate names [: dist-destination-path];
 
-Copies or (if there is a rule to generate files from the extension)
-generates files that do not contribute to libraries or executables.
+Copies or (if there is a rule to translate files from the extension)
+produces files that do not contribute to libraries or executables.
 If any of names is a directory, it is recursed into.
 
 For example:
 
-# copy/build specified files into dist/bin
-misc foo.sh foo2.sh : dist/bin;
+# copy/translate specified files into dist/bin
+translate foo.sh foo2.sh : bin;
 
 # copy/build index.rst into priv/<chain> and files in doc dir and below
 # into priv/<chain>/doc, preserving any subdirectory structure.
-misc index.rst doc;
+translate index.rst doc;
 
 Source files can be generated this way too, but they are usually generated
-via a static-lib statement.
+by adding the file that will be translated into the source file to a
+static-lib statement.
+
+
+Generated files
+~~~~~~~~~~~~~~~
+
+generate target : command-line : inputs [: destination-path];
+
+In cases where translate isn't flexible enough, or can't be used because
+it does the same job on all files of a given extension, the generate statement
+can be used to generate a file.
+
+The command-line must place the named target in <destination-path> if one is
+provided. Otherwise, it must place it in priv/<chain>.
+
+If a named input has already been put into the build directory (e.g. via translate),
+that file is depended on rather than another of the same name in the source tree.
+
+The targets depend on the given inputs and the command utility if it is known,
+and also on the files listed in the ${DEPS} file produced by the command's
+previous invocation, if any.
+
+The same command-line expansions used in configured commands apply here.
+
+Some examples:
+
+generate foo.validated :
+         validate-config --config=${INPUT} --deps=${DEPS} --result=${OUTPUT} :
+         foo.cfg;
+
+generate foo.data : generate-data --output=${OUTPUT} : : data;
+
+Don't use this statement to generate source files - configure a command
+to do so and add the input files to a static-lib.
 
 
 Dependencies

@@ -92,7 +92,7 @@ else version(Windows) {
 // It is a simple input range (empty(), front() and popFront()).
 //
 // Notes from Wikipedia article on Binary Heap:
-// * Tree is concocted using index arithetic on underlying array, as follows:
+// * Tree is concocted using index arithmetic on underlying array, as follows:
 //   First layer is 0. Second is 1,2. Third is 3,4,5,6, etc.
 //   Therefore parent of index i is (i-1)/2 and children of index i are 2*i+1 and 2*i+2
 // * Tree is balanced, with incomplete population to right of bottom layer.
@@ -102,7 +102,7 @@ else version(Windows) {
 //   - Swap new element with parent until parent !less child.
 // * Remove:
 //   - Replace root with the last element and reduce the length of the array.
-//   - If moved element is less than a child, swap with largest child.
+//   - If the new root element is less than a child, swap with largest child.
 //-----------------------------------------------------------------------------------------
 
 struct PriorityQueue(T, alias less = "a < b") {
@@ -238,21 +238,21 @@ shared static this() {
 // Signal handling to bail on SIGINT or SIGHUP.
 //-----------------------------------------------------------------------
 
-__gshared ubyte bailFlag = 0;
+__gshared ubyte bailSignal = 0;
 
 void doBailer() {
     try {
-        // Wait until it is time to call killer.bail(), or to teminate
-        while (volatileLoad(&bailFlag) == 0)
+        // Wait until it is time to call killer.bail(), or to terminate
+        while (volatileLoad(&bailSignal) == 0)
         {
             // Wait for a short while to see if our owner has terminated,
             // in which case we get an exception.
             receiveTimeout(50.msecs, (bool bogus) {});
         }
 
-        if (volatileLoad(&bailFlag) == 1)
+        if (volatileLoad(&bailSignal) != 0)
         {
-            say("Got a termination signal - bailing");
+            say("Got a termination signal=%s - bailing", bailSignal);
             killer.bail();
         }
     }
@@ -260,7 +260,7 @@ void doBailer() {
 }
 
 extern (C) void mySignalHandler(int sig) nothrow @nogc @system {
-    volatileStore(&bailFlag, 1);
+    volatileStore(&bailSignal, cast(ubyte)sig);
 }
 
 shared static this() {

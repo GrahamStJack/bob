@@ -44,7 +44,7 @@ void doWork(bool printActions, uint index) {
     string myName = format("worker%d", index);
 
     string resultsPath = buildPath("tmp", myName);
-    string tmpPath;
+    string tmpPath     = buildPath("tmp", myName ~ "-tmp");
 
     void perform(string action, string command, string targets) {
         say("%s", action);
@@ -53,9 +53,14 @@ void doWork(bool printActions, uint index) {
         success = false;
         string[string] env;
 
-        bool isTest = command.length > 5 && command[0 .. 5] == "TEST ";
+        if (tmpPath.exists) {
+            rmdirRecurse(tmpPath);
+        }
+        env["TMP_PATH"] = tmpPath;
 
-        if (command.length > 5 && command[0..5] == "COPY ") {
+        bool isTest = command.startsWith("TEST ");
+
+        if (command.startsWith("COPY ")) {
             // Do the copy ourselves because Windows doesn't seem to have an
             // external copy command, and this is faster anyway.
             string[] splitCommand = split(command);
@@ -64,18 +69,25 @@ void doWork(bool printActions, uint index) {
             }
             string from = splitCommand[1];
             string to   = splitCommand[2];
-            std.file.copy(from, to);
-            auto now = Clock.currTime();
-            to.setTimes(now, now);
-            version(Posix) {
-                // Preserve executable permission
-                to.setExecutableIf(from);
+            try {
+                std.file.copy(from, to);
+                version(Posix) {
+                    // Preserve executable permission
+                    to.setExecutableIf(from);
+                }
+                auto now = Clock.currTime();
+                to.setTimes(now, now);
+                ownerTid.send(index, action);
+                return;
             }
-            ownerTid.send(index, action);
-            return;
+            catch (Exception ex) {
+                say("%s: FAILED\n%s\n%s", action, command, ex.msg);
+                ownerTid.send(true);
+                throw new BailException();
+            }
         }
 
-        else if (command.length > 6 && command[0..6] == "DUMMY ") {
+        else if (command.startsWith("DUMMY ")) {
             // Create a dummy file
             string[] splitCommand = split(command);
             if (splitCommand.length != 2) {
@@ -88,13 +100,9 @@ void doWork(bool printActions, uint index) {
         }
 
         else if (isTest) {
-            // Do test preparation - choose tmp dir and remove it if present
-            tmpPath = buildPath("tmp", myName ~ "-test");
-            if (tmpPath.exists) {
-                rmdirRecurse(tmpPath);
-            }
+            // Do test preparation - make the tmp dir as a convenience
+            // FIXME - remove the need to create it
             mkdir(tmpPath);
-            env["TMP_PATH"] = tmpPath;
             command = command[5 .. $];
         }
 
@@ -204,5 +212,6 @@ void doWork(bool printActions, uint index) {
             );
         }
     }
-    catch (Exception ex) {}
+    catch (BailException ex) {}
+    catch (Exception ex) { /*fatal("Got unexpected exception %s :\n%s", ex.msg, ex.info);*/ }
 }

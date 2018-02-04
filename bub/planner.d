@@ -33,7 +33,6 @@ import std.concurrency;
 
 static import std.array;
 
-
 //-------------------------------------------------------------------------
 // Planner
 //
@@ -378,6 +377,9 @@ final class Action {
         }
 
         command = resolveCommand(command, extras, sysLibFlags);
+        if (name.startsWith("Generate")) {
+            say("Completed command %s is %s", name, command);
+        }
     }
 
     // issue this action
@@ -615,6 +617,36 @@ class File : Node {
         }
         else {
             error(origin, "Could not find source file %s in %s, or %s", name, path1, path2);
+            assert(0);
+        }
+    }
+
+    // Add a non-source input file that may be in any of src/<chain>, priv/<chain> or dist/<dir>
+    static File addGenerateInput(Origin origin, Node parent, string distDir, string extra, Privacy privacy) {
+
+        // possible paths to the file
+        string path1 = prospectivePath("priv", parent, extra); // a built file in priv
+        string path2 = buildPath("dist", distDir, extra);      // a built file in dist
+        string path3 = prospectivePath("src", parent, extra);  // a file in src directory tree
+
+        string name = extra.replace("/", "__");
+
+        if (auto file = path1 in byPath) {
+            // this is a built non-source file in priv that we already know about
+            errorUnless(!file.used, origin, "%s has already been used", path1);
+            return *file;
+        }
+        else if (auto file = path2 in byPath) {
+            // this is a built non-source file in dist that we already know about
+            errorUnless(!file.used, origin, "%s has already been used", path2);
+            return *file;
+        }
+        else if (path3.exists) {
+            // a file under src
+            return new File(origin, parent, name, privacy, path3, false);
+        }
+        else {
+            error(origin, "Could not find file %s in %s, %s or %s", name, path1, path2, path3);
             assert(0);
         }
     }
@@ -1031,8 +1063,8 @@ bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
                     if (dlib is null || dlib.number > target.number) {
                         errorUnless(!preventStaticLibs || slib.objs.length == 0, target.origin,
                                 "A dynamic library (%s) cannot link with a static lib (%s) - " ~
-                                "put the static lib into a dynamic-lib",
-                                target, *slib);
+                                "put the static lib into a dynamic-lib or explicitly contain it in %s",
+                                target, *slib, *slib);
                         target.action.addLaterDependency(*slib);
                         if (slib.objs.length > 0) {
                             staticLibs ~= *slib;
@@ -1262,20 +1294,20 @@ final class Exe : Binary {
 
 
 //
-// Add a misc file and its target(s), either copying the specified path into
+// Add a translate file and its target(s), either copying the specified path into
 // destDir, or using a configured command to create the target file(s) if the
 // specified source file has a command extension.
 //
 // If the specified path is a directory, add all its contents instead.
 //
-void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) {
+void translateFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) {
     if (name[0] == '.') return;
 
     string fromPath = buildPath("src", pkg.trail, dir, name);
 
     if (isDir(fromPath)) {
         foreach (string path; dirEntries(fromPath, SpanMode.shallow)) {
-            miscFile(origin, pkg, buildPath(dir, name), path.baseName(), dest);
+            translateFile(origin, pkg, buildPath(dir, name), path.baseName(), dest);
         }
     }
     else {
@@ -1324,6 +1356,43 @@ void miscFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) 
             }
         }
     }
+}
+
+//
+// Add generate files and (if not already known) their inputs, using the
+// given command to do so.
+//
+void generateFile(ref Origin origin,
+                  Pkg        pkg,
+                  string     targetName,
+                  string[]   commandTokens,
+                  string[]   inputNames,
+                  string     dest) {
+    string fromPath = buildPath("src", pkg.trail, dest, targetName);
+
+    // Create the input files if they aren't already known
+    File[] inputs;
+    foreach (inputName; inputNames) {
+        inputs ~= File.addGenerateInput(origin, pkg, dest, inputName, Privacy.PUBLIC);
+    }
+
+    // Decide on the destination directory.
+    string destDir = dest.length == 0 ?
+        buildPath("priv", pkg.trail) :
+        buildPath("dist", dest);
+
+    // Compose the command-line
+    string commandLine = commandTokens.join(" ");
+
+    // Generate the target file(s) using the given command
+    File   target = new File(origin, pkg, targetName, Privacy.PRIVATE, buildPath(destDir, targetName), true);
+    Action action = new Action(origin,
+                               pkg,
+                               format("%-15s %s", "Generate", target.path),
+                               commandLine,
+                               [target],
+                               inputs);
+    target.action = action;
 }
 
 
@@ -1391,15 +1460,27 @@ void processBubfile(string indent, Pkg pkg) {
             }
             break;
 
-            case "misc":
+            case "translate":
             {
                 foreach (name; statement.targets) {
-                    miscFile(statement.origin,
-                             pkg,
-                             "",
-                             name,
-                             statement.arg1.length == 0 ? "" : statement.arg1[0]);
+                    translateFile(statement.origin,
+                                  pkg,
+                                  "",
+                                  name,
+                                  statement.arg1.length == 0 ? "" : statement.arg1[0]);
                 }
+            }
+            break;
+
+            case "generate":
+            {
+                errorUnless(statement.targets.length == 1, statement.origin, "One target must be specified");
+                generateFile(statement.origin,
+                             pkg,
+                             statement.targets[0],
+                             statement.arg1,
+                             statement.arg2,
+                             statement.arg3.length == 0 ? "" : statement.arg3[0]);
             }
             break;
 

@@ -371,8 +371,8 @@ Statement[] readBubfile(string path) {
     int          anchor;
     bool         inWord;
     bool         inComment;
-    bool         waitingForOpeningBrace;
-    bool         waitingForClosingBrace;
+    bool         waitingForOpeningParen;
+    bool         waitingForClosingParen;
     bool         usingText = true;
     Statement    statement;
     bool[string] architectures;
@@ -388,7 +388,7 @@ Statement[] readBubfile(string path) {
 
             if (word.length > 2 && word[0] == '[' && ch == ']') {
                 // Start of a conditional
-                waitingForOpeningBrace = true;
+                waitingForOpeningParen = true;
                 usingText              = (word[1..$] in architectures) !is null;
             }
             else {
@@ -434,27 +434,27 @@ Statement[] readBubfile(string path) {
                 inComment = false;
             }
         }
-        else if (waitingForOpeningBrace) {
-            if (ch == '{') {
-                waitingForOpeningBrace = false;
-                waitingForClosingBrace = true;
+        else if (waitingForOpeningParen) {
+            if (ch == '(') {
+                waitingForOpeningParen = false;
+                waitingForClosingParen = true;
             }
             else {
-                errorUnless(isWhite(ch), origin, "Unexpected non-whitespace between '[' and '{'");
+                errorUnless(isWhite(ch), origin, "Unexpected non-whitespace between '[' and '('");
             }
         }
-        else if (waitingForClosingBrace && !usingText) {
-            if (ch == '}') {
-                waitingForClosingBrace = false;
+        else if (waitingForClosingParen && !usingText) {
+            if (ch == ')') {
+                waitingForClosingParen = false;
                 usingText              = true;
             }
         }
-        else if (ch == '{') {
+        else if (ch == '(') {
             error(origin, "Unexpected opening brace");
         }
-        else if (ch == '}') {
-            errorUnless(waitingForClosingBrace, origin, "Unexpected closing brace");
-            waitingForClosingBrace = false;
+        else if (ch == ')') {
+            errorUnless(waitingForClosingParen, origin, "Unexpected closing brace");
+            waitingForClosingParen = false;
             processWord(pos, ch);
         }
         else if (isWhite(ch)) {
