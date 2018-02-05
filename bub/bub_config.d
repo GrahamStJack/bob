@@ -327,36 +327,58 @@ void establishBuildDir(string          buildDir,
 
 //
 // Return whatever the given string evaluates to, replacing any $(<command>) instances
-// with whatever <command> outputs.
+// with whatever <command> outputs, and expanding any ${<define>} tokens in the given string.
 //
-string evaluate(string text) {
+string evaluate(string text, const ref Vars vars) {
     string result;
     bool   inCommand;
+    bool   inVar;
     char   prev;
-    size_t commandStart;
+    string command;
+    string var;
 
     foreach (i, ch; text) {
+        char next = i+1 < text.length ? text[i+1] : '\0';
         if (ch == '(' && prev == '$') {
             enforce(!inCommand, "Nested commands not supported");
-            inCommand    = true;
-            commandStart = i + 1;
-            result       = result[0..$-1];
+            enforce(!inVar, "Commands inside variables not supported");
+            inCommand = true;
+            command   = "";
         }
         else if (inCommand && ch == ')') {
-            auto command = text[commandStart..i];
-            auto rc      = executeShell(command);
+            auto rc = executeShell(command);
             enforce(rc.status == 0, format("Failed to run '%s', output '%s'", command, rc.output));
-            result ~= rc.output;
+            result ~= rc.output.strip;
             inCommand = false;
         }
-        else if (!inCommand) {
+        else if (ch == '{' && prev == '$') {
+            enforce(!inVar, "Nested vars are not supported");
+            inVar  = true;
+            var    = "";
+        }
+        else if (inVar && ch == '}') {
+            enforce(var in vars, format("Variable '%s' not defined", var));
+            if (inCommand) {
+                command ~= vars[var].join(" ").strip;
+            }
+            else {
+                result ~= vars[var].join(" ").strip;
+            }
+            inVar = false;
+        }
+        else if (inVar) {
+            var ~= ch;
+        }
+        else if (inCommand && (ch != '$' || next != '{')) {
+            command ~= ch;
+        }
+        else if (!inCommand && !inVar && (ch != '$' || (next != '(' && next != '{'))) {
             result ~= ch;
         }
         prev = ch;
     }
     result = result.strip;
-    enforce(!inCommand, format("Unterminated command in '", text, "'"));
-    //writeln("'", text, "' evaluated to '", result, "'");
+    enforce(!inCommand && !inVar, format("Unterminated command or variable in '", text, "'"));
     return result;
 }
 
@@ -512,7 +534,7 @@ void parseConfig(string        configFile,
                     string[] tokens = split(line, " =");
                     if (tokens.length == 2) {
                         vars.append("syslib-compile-flags " ~ strip(tokens[0]),
-                                    split(evaluate(strip(tokens[1]))),
+                                    split(evaluate(strip(tokens[1]), vars)),
                                     AppendType.notExist);
                     }
                     break;
@@ -522,7 +544,7 @@ void parseConfig(string        configFile,
                     string[] tokens = split(line, " =");
                     if (tokens.length == 2) {
                         vars.append("syslib-link-flags " ~ strip(tokens[0]),
-                                    split(evaluate(strip(tokens[1]))),
+                                    split(evaluate(strip(tokens[1]), vars)),
                                     AppendType.notExist);
                     }
                     break;

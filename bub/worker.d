@@ -32,6 +32,19 @@ import std.concurrency;
 static import std.stdio;
 
 
+// Attempt to remove a file, quashing any exceptions
+void tryRemove(string path) {
+    try {
+        std.file.remove(path);
+    }
+    catch (Exception ex) {
+        if (path.exists) {
+            say("Failed to remove %s", path);
+        }
+    }
+}
+
+
 //
 // The worker function.
 //
@@ -111,7 +124,7 @@ void doWork(bool printActions, uint index) {
         // delete any pre-existing files that we are about to build
         foreach (target; targs) {
             if (exists(target)) {
-                std.file.remove(target);
+                target.tryRemove;
             }
         }
 
@@ -137,7 +150,7 @@ void doWork(bool printActions, uint index) {
             foreach (target; targs) {
                 if (exists(target)) {
                     say("Deleting %s", target);
-                    std.file.remove(target);
+                    target.tryRemove;
                 }
             }
 
@@ -193,7 +206,7 @@ void doWork(bool printActions, uint index) {
                     // build command printed something useful.
                     say("\n%s", readText(resultsPath));
                 }
-                remove(resultsPath);
+                resultsPath.tryRemove;
             }
 
             // tell planner the action succeeded

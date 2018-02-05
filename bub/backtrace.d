@@ -21,6 +21,7 @@ private {
     import std.demangle         : demangle;
     import std.exception        : assumeWontThrow;
     import std.string           : format, lastIndexOf;
+    import std.stdio;
 
 
     // Signal handler providing basic stack information.
