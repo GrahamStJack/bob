@@ -1300,62 +1300,75 @@ final class Exe : Binary {
 //
 // If the specified path is a directory, add all its contents instead.
 //
-void translateFile(ref Origin origin, Pkg pkg, string dir, string name, string dest) {
-    if (name[0] == '.') return;
-
-    string fromPath = buildPath("src", pkg.trail, dir, name);
-
-    if (isDir(fromPath)) {
-        foreach (string path; dirEntries(fromPath, SpanMode.shallow)) {
-            translateFile(origin, pkg, buildPath(dir, name), path.baseName(), dest);
-        }
+// The initially specified files go into the destination without their preceding
+// directory. That is:
+// * "translate doc;"       will translate all the files in doc into priv/<chain>
+// * "translate doc : doc;" will translate all the files in doc into dist/doc
+// preserving any directory structure within doc.
+//
+void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
+    string destDir  = dest == "" ? buildPath("priv", pkg.trail) : buildPath("dist", dest);
+    string destOmit = "";
+    if (buildPath("src", pkg.trail, name).isDir) {
+        destOmit = name ~ dirSeparator;
     }
-    else {
-        // Create the source file
-        string ext        = extension(name);
-        string relName    = buildPath(dir, name);
-        File   sourceFile = File.addSource(origin, pkg, relName, Privacy.PUBLIC);
+    else if (name.dirName != ".") {
+        destOmit = name.dirName ~ dirSeparator;
+    }
 
-        // Decide on the destination directory.
-        string destDir = dest.length == 0 ?
-            buildPath("priv", pkg.trail, dir) :
-            buildPath("dist", dest, dir);
+    void translate(string relative) {
+        string fromPath = buildPath("src", pkg.trail, relative);
 
-        GenerateCommand *generate = ext in generateCommands;
-        if (generate is null) {
-            // Target is a simple copy of source file, preserving execute permission.
-            File destFile = new File(origin, pkg, relName ~ "-copy", Privacy.PUBLIC,
-                                     buildPath(destDir, name), true);
-            destFile.action = new Action(origin,
-                                         pkg,
-                                         format("%-15s %s", "Copy", destFile.path),
-                                         "COPY ${INPUT} ${OUTPUT}",
-                                         [destFile],
-                                         [sourceFile]);
+        if (fromPath.isDir) {
+            string srcOmit = buildPath("src", pkg.trail) ~ pathSeparator;
+            foreach (string rel; dirEntries(fromPath, SpanMode.shallow)) {
+                translate(rel[srcOmit.length..$]);
+            }
         }
         else {
-            // Generate the target file(s) using a configured command.
-            File[] files;
-            string suffixes;
-            foreach (suffix; generate.suffixes) {
-                string destName = stripExtension(name) ~ suffix;
-                File gen = new File(origin, pkg, destName, Privacy.PRIVATE,
-                                    buildPath(destDir, destName), true);
-                files    ~= gen;
-                suffixes ~= suffix ~ " ";
+            // Create the source file
+            string ext        = relative.extension;
+            File   sourceFile = File.addSource(origin, pkg, relative, Privacy.PUBLIC);
+
+            // Determine the destination path for a copy
+            string copyPath = buildPath(destDir, relative[destOmit.length..$]);
+
+            GenerateCommand *generate = ext in generateCommands;
+            if (generate is null) {
+                // Target is a simple copy of source file, preserving execute permission
+                File destFile = new File(origin, pkg, copyPath.baseName ~ "-copy", Privacy.PUBLIC, copyPath, true);
+                destFile.action = new Action(origin,
+                                            pkg,
+                                            format("%-15s %s", "Copy", destFile.path),
+                                            "COPY ${INPUT} ${OUTPUT}",
+                                            [destFile],
+                                            [sourceFile]);
             }
-            errorUnless(files.length > 0, origin, "Must have at least one destination suffix");
-            Action genAction = new Action(origin,
-                                          pkg,
-                                          format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
-                                          generate.command,
-                                          files,
-                                          [sourceFile]);
-            foreach (gen; files) {
-                gen.action = genAction;
+            else {
+                // Generate the target file(s) using a configured command
+                File[] files;
+                string suffixes;
+                foreach (suffix; generate.suffixes) {
+                    string path = copyPath.stripExtension ~ suffix;
+                    File gen = new File(origin, pkg, path.baseName, Privacy.PRIVATE, path, true);
+                    files    ~= gen;
+                    suffixes ~= suffix ~ " ";
+                }
+                errorUnless(files.length > 0, origin, "Must have at least one destination suffix");
+                Action genAction = new Action(origin,
+                                            pkg,
+                                            format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
+                                            generate.command,
+                                            files,
+                                            [sourceFile]);
+                foreach (gen; files) {
+                    gen.action = genAction;
+                }
             }
         }
     }
+
+    translate(name);
 }
 
 //
@@ -1465,7 +1478,6 @@ void processBubfile(string indent, Pkg pkg) {
                 foreach (name; statement.targets) {
                     translateFile(statement.origin,
                                   pkg,
-                                  "",
                                   name,
                                   statement.arg1.length == 0 ? "" : statement.arg1[0]);
                 }
