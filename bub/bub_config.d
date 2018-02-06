@@ -244,7 +244,6 @@ void establishBuildDir(string          buildDir,
 
 
     // Create environment file.
-    string lib  = buildPath("dist", "lib");
     string bin  = buildPath("dist", "bin");
     string data = buildPath("dist", "data");
     string env  = buildPath(buildDir, "environment");
@@ -253,8 +252,8 @@ void establishBuildDir(string          buildDir,
         envText ~= "#!/bin/bash\n";
         envText ~= "export " ~ toEnv("LD_LIBRARY_PATH",
                                      vars,
-                                     ["SYS_LIB"],
-                                     [lib] ~ fromEnv("LD_LIBRARY_PATH"));
+                                     ["LIB_DIRS"],
+                                     fromEnv("LD_LIBRARY_PATH"));
         envText ~= "export " ~ toEnv("PATH",
                                      vars,
                                      ["SYS_PATH"],
@@ -263,7 +262,7 @@ void establishBuildDir(string          buildDir,
         envText ~= "export SYSTEM_DATA_PATH=\"" ~ data ~ "\"\n";
     }
     version(Windows) {
-        envText ~= toEnv("PATH", vars, ["SYS_LIB", "SYS_PATH"], [lib, bin] ~ fromEnv("PATH"));
+        envText ~= toEnv("PATH", vars, ["LIB_DIRS", "SYS_PATH"], [lib, bin] ~ fromEnv("PATH"));
         envText ~= "set DIST_DATA_PATH=\"" ~ data ~ "\"\n";
     }
     update(env, envText, false);
@@ -533,9 +532,8 @@ void parseConfig(string        configFile,
                 case Section.syslibCompileFlags: {
                     string[] tokens = split(line, " =");
                     if (tokens.length == 2) {
-                        vars.append("syslib-compile-flags " ~ strip(tokens[0]),
-                                    split(evaluate(strip(tokens[1]), vars)),
-                                    AppendType.notExist);
+                        string[] options = split(evaluate(strip(tokens[1]), vars));
+                        vars.append("syslib-compile-flags " ~ strip(tokens[0]), options, AppendType.notExist);
                     }
                     break;
                 }
@@ -543,9 +541,15 @@ void parseConfig(string        configFile,
                 case Section.syslibLinkFlags: {
                     string[] tokens = split(line, " =");
                     if (tokens.length == 2) {
-                        vars.append("syslib-link-flags " ~ strip(tokens[0]),
-                                    split(evaluate(strip(tokens[1]), vars)),
-                                    AppendType.notExist);
+                        string[] options = split(evaluate(strip(tokens[1]), vars));
+                        vars.append("syslib-link-flags " ~ strip(tokens[0]), options, AppendType.notExist);
+
+                        // Add the -L options to the LIB_DIRS variable so they end up in the environment file
+                        foreach (option; options) {
+                            if (option.startsWith("-L")) {
+                                append(vars, "LIB_DIRS", [option[2..$]], AppendType.mustExist);
+                            }
+                        }
                     }
                     break;
                 }
@@ -612,7 +616,8 @@ int main(string[] args) {
     Locations packages;
     string[]  pkgNames;
 
-    vars["SRCDIR"] = [srcDir];
+    vars["SRCDIR"]   = [srcDir];
+    vars["LIB_DIRS"] = [buildPath("dist", "lib")];
 
     parseConfig(configFile, mode, vars, repos, packages, pkgNames);
     establishBuildDir(buildDir, srcDir, vars, repos, packages, pkgNames);

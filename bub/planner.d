@@ -1336,7 +1336,8 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
             GenerateCommand *generate = ext in generateCommands;
             if (generate is null) {
                 // Target is a simple copy of source file, preserving execute permission
-                File destFile = new File(origin, pkg, copyPath.baseName ~ "-copy", Privacy.PUBLIC, copyPath, true);
+                string fileName = copyPath.replace("/", "__") ~ "-copy";
+                File destFile = new File(origin, pkg, fileName, Privacy.PUBLIC, copyPath, true);
                 destFile.action = new Action(origin,
                                             pkg,
                                             format("%-15s %s", "Copy", destFile.path),
