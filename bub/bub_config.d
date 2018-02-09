@@ -533,6 +533,13 @@ void parseConfig(string        configFile,
                     string[] tokens = split(line, " =");
                     if (tokens.length == 2) {
                         string[] options = split(evaluate(strip(tokens[1]), vars));
+                        // Replace any "-I with "-isystem" so that warnings will be ignored in
+                        // system headers
+                        foreach (ref option; options) {
+                            if (option.startsWith("-I")) {
+                                option = "-isystem" ~ option[2..$];
+                            }
+                        }
                         vars.append("syslib-compile-flags " ~ strip(tokens[0]), options, AppendType.notExist);
                     }
                     break;
