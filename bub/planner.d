@@ -97,9 +97,10 @@ final class SysLib {
 
 
 //
-// DEPS information for the whole project, persisted between builds as a
-// performance optimisation. Populated from file at the start of the build,
-// updated as the build progresses, and flushed to file at the end of the build.
+// DEPS information for the whole project, persisted between builds so that
+// we don't have to re-generate it to find out if a generated file is out of date.
+// The in-memory copy is loaded from storage at the start of the build,
+// and updated/flushed as the build progresses.
 //
 // This information is used in two quite different ways:
 //
@@ -113,49 +114,54 @@ final class SysLib {
 //   establishes new dependencies on the libraries, which may cause the build of
 //   the dynamic library or executable to be delayed.
 //
-// Because the cached information has to be correct or not present at all, the
-// cache file is removed after being read, and re-created on flush - and flush
-// creates a temporary file and then renames it.
-//
 class DependencyCache {
+    enum string dir    = "deps";
+    enum string prefix = dir ~ dirSeparator;
+
     string[][string] dependencies;
 
     this() {
         executeShell("rm DEPENDENCIES-*");
-        string path = "dependency-cache";
+
+        if (dir.exists && !dir.isDir) {
+            dir.remove;
+        }
+
+        if (dir.exists) {
+            foreach (DirEntry entry; dir.dirEntries(SpanMode.depth, false)) {
+                if (entry.linkAttributes.attrIsFile) {
+                    string path      = entry.name;
+                    string builtPath = path[prefix.length..$];
+                    dependencies[builtPath] = path.readText.split;
+                }
+            }
+        }
+    }
+
+    void remove(string builtPath) {
+        dependencies.remove(builtPath);
+        auto path = prefix ~ builtPath;
         if (path.exists) {
-            foreach (line; path.readText.splitLines) {
-                auto tokens = line.split;
-
-                string   file = tokens[0];
-                string[] deps = tokens[1..$];
-
-                dependencies[file] = deps;
-            }
-            path.rename("dependency-cache.old");
-        }
-        else {
-            say("dependency-cache is missing");
+            path.remove;
         }
     }
 
-    void update(string file, string[] deps) {
-        dependencies[file] = deps;
-    }
+    void update(string builtPath, string[] deps) {
+        dependencies[builtPath] = deps.dup;
 
-    void flush() {
         string content;
-        foreach (file, deps; dependencies) {
-            content ~= file;
-            foreach (dep; deps) {
-                content ~= " " ~ dep;
-            }
-            content ~= "\n";
+        foreach (dep; deps) {
+            content ~= " " ~ dep;
         }
+        content = content[1..$];
 
-        string tmpPath = "dependency-cache.tmp";
+        string path    = prefix ~ builtPath;
+        string tmpPath = path ~ ".tmp";
+        if (!path.dirName.exists) {
+            path.dirName.mkdirRecurse;
+        }
         tmpPath.write(content);
-        tmpPath.rename("dependency-cache");
+        tmpPath.rename(path);
     }
 };
 
@@ -206,6 +212,7 @@ final class Action {
         addDependency(pkg.bubfile);
 
         // Recognise in-project tools in the command.
+        // FIXME make this also work for tool names inside variables
         foreach (token; split(command)) {
             if (token.startsWith([buildPath("dist", "bin"), "priv"])) {
                 // Find the tool
@@ -216,15 +223,18 @@ final class Action {
                 addDependency(*tool);
             }
         }
+    }
 
-        // Add cached dependencies. Note that we assume that all of this action's built
-        // files have the same dependencies, and treat the cached dependencies with
-        // some suspicion/leniency, as they can be out of date.
+    void addCachedDependencies() {
+        // We assume that all of this action's built files have the same dependencies,
+        // and treat the cached dependencies with some suspicion/leniency, as they
+        // can be out of date.
         auto dependPaths = builds[0].path in File.cache.dependencies;
         if (dependPaths !is null && dependPaths.length > 0) {
             foreach (dependPath; *dependPaths) {
                 if (!dependPath.isAbsolute && dependPath.dirName != ".") {
-                    if (dependPath !in File.byPath) {
+                    auto depend = dependPath in File.byPath;
+                    if (depend is null) {
                         // Don't know about dependPath, or it refers to a file
                         // declared later. This is normal, because the cached dependencies
                         // can become invalidated by Bubfile changes, so just treat the
@@ -239,22 +249,27 @@ final class Action {
                         // cached dependency might be stale.
                         // The dependency itself is safe because the depend file is already
                         // defined so there can't be a circle.
-                        auto depend = File.byPath[dependPath];
                         if (builds[0] !in depend.dependedBy) {
-                            depends ~= depend;
+                            depends ~= *depend;
                             foreach (built; builds) {
                                 depend.dependedBy[built] = true;
-                                if (g_print_deps) say("%s depends on %s", built, depend);
+                                if (g_print_deps) say("%s depends on %s", built, *depend);
                             }
                         }
                     }
                 }
                 else {
-                    // Assume a system file
-                    if (dependPath !in systemModTimes) {
-                        systemModTimes[dependPath] = dependPath.modifiedTime(false);
+                    // Assume a system file, treating headers in the build directory like a system
+                    // header because dependency-restricting rules don't apply to them
+                    auto lookup = dependPath in systemModTimes;
+                    if (lookup !is null) {
+                        newest = max(newest, *lookup);
                     }
-                    newest = max(newest, systemModTimes[dependPath]);
+                    else {
+                        auto modTime = dependPath.modifiedTime(false);
+                        systemModTimes[dependPath] = modTime;
+                        newest = max(newest, modTime);
+                    }
                 }
             }
         }
@@ -657,18 +672,20 @@ class File : Node {
         modTime = path.modifiedTime(true);
         if (g_print_deps) say("Updated %s", this);
 
+        // Remove this built file's cached dependencies so that we won't have stale ones
+        // in a subsequent run if the checks below fail
+        cache.remove(path);
+
         // Extract updated dependency information from action.depsPath,
         // validate it, and update the cache.
-        // We don't actually update dependencies here, because they apply to the
-        // next bub run - but we have to make sure that they will be valid then,
-        // and not have any cached dependencies for this file if they are invalid.
+        // We don't actually update the action's dependencies here, because they apply to the
+        // next bub run - but we have to make sure that they will be valid then.
         string[] deps = parseDeps(action.depsPath, inputs);
-        cache.dependencies.remove(path); // remove from cache in case of failure
         bool[string] isInput;
         foreach (input; inputs) isInput[input] = true;
         foreach (dep; deps) {
             if (!dep.isAbsolute && dep.dirName != "." && dep !in isInput) {
-                // dep is an in-project source file that isn't one of the inputs
+                // dep is an in-project source file not in "." that isn't one of the inputs
                 File* depend = dep in File.byPath;
                 errorUnless(depend !is null, origin, "%s depends on unknown '%s'", this, dep);
                 if (g_print_deps && this !in depend.dependedBy) {
@@ -677,7 +694,9 @@ class File : Node {
                 checkCanDepend(*depend);
             }
         }
-        cache.update(path, deps); // success - put new information back into cache
+
+        // Success - put new information back into cache
+        cache.update(path, deps);
 
         upToDate();
     }
@@ -1320,7 +1339,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
         string fromPath = buildPath("src", pkg.trail, relative);
 
         if (fromPath.isDir) {
-            string srcOmit = buildPath("src", pkg.trail) ~ pathSeparator;
+            string srcOmit = buildPath("src", pkg.trail) ~ dirSeparator;
             foreach (string rel; dirEntries(fromPath, SpanMode.shallow)) {
                 translate(rel[srcOmit.length..$]);
             }
@@ -1507,40 +1526,58 @@ void processBubfile(string indent, Pkg pkg) {
 
 
 //
-// Remove any files in obj, priv and dist that aren't marked as needed
+// Remove any files in obj, priv and dist that aren't needed
 //
 void cleandirs() {
-    void cleanDir(string name) {
-        if (exists(name) && isDir(name)) {
-            bool[string] dirs;
-            foreach (DirEntry entry; dirEntries(name, SpanMode.depth, false)) {
-                bool isDir = attrIsDir(entry.linkAttributes);
+    void cleanDir(string name, string prefix = "") {
+        if (name.exists && name.isDir) {
+            bool[string] unwantedFiles;
+            string[]     unwantedDirs;
+            bool[string] dirsWithChildren;
 
-                if (!isDir) {
-                    File* file = entry.name in File.byPath;
-                    if (file is null || (*file) !in File.allBuilt) {
-                        say("Removing unwanted file %s", entry.name);
-                        std.file.remove(entry.name);
+            // Determine what is unwanted
+            foreach (DirEntry entry; name.dirEntries(SpanMode.depth, false)) {
+                string path      = entry.name;
+                string builtPath = path[prefix.length..$];
+                if (!entry.linkAttributes.attrIsDir) {
+                    // A file
+                    File* file = builtPath in File.byPath;
+                    if (file is null || *file !in File.allBuilt) {
+                        unwantedFiles[path] = true;
                     }
                     else {
-                        // leaving a file in place
-                        dirs[entry.name.dirName()] = true;
+                        dirsWithChildren[path.dirName] = true;
                     }
                 }
                 else {
-                    if (entry.name !in dirs) {
-                        rmdir(entry.name);
+                    // A directory - visited after all its children
+                    if (path !in dirsWithChildren) {
+                        unwantedDirs ~= path;
                     }
                     else {
-                        dirs[entry.name.dirName()] = true;
+                        dirsWithChildren[path.dirName] = true;
                     }
                 }
             }
+
+            // Remove the unwanted stuff
+            foreach (path; unwantedFiles.keys) {
+                say("Removing unwanted file %s", path);
+                path.remove;
+            }
+            foreach (path; unwantedDirs) {
+                say("Removing unwanted dir %s", path);
+                path.rmdir;
+            }
         }
     }
+
     cleanDir("obj");
     cleanDir("priv");
     cleanDir("dist");
+    cleanDir(buildPath("deps", "obj"),  "deps" ~ dirSeparator);
+    cleanDir(buildPath("deps", "priv"), "deps" ~ dirSeparator);
+    cleanDir(buildPath("deps", "dist"), "deps" ~ dirSeparator);
 }
 
 
@@ -1601,17 +1638,19 @@ void flushCompletedCommands() {
 //
 bool doPlanning(Tid[] workerTids) {
 
-    // Load the dependency cache
-    File.cache = new DependencyCache();
-
     int needed;
     try {
-        // Read the project Bubfile
+        // Read the project's Bubfiles
         auto project = new Pkg(Origin(), null, "", Privacy.PRIVATE);
         processBubfile("", project);
 
-        // clean out unwanted files from the build dir
+        // Clean out unwanted built and deps files and load the dependency cache -
+        // now that we know all the built files
         cleandirs();
+        File.cache = new DependencyCache();
+        foreach (name, action; Action.byName) {
+            action.addCachedDependencies;
+        }
 
         // Now that we know about all the files and have the mostly-complete
         // dependency graph (what libraries to link is still uncertain), issue
@@ -1673,8 +1712,7 @@ bool doPlanning(Tid[] workerTids) {
     catch (BailException ex) {}
     catch (Exception ex) { say("Unexpected exception %s", ex); }
 
-    // Flush the dependency cache and completed commands so we lock in any progress made
-    File.cache.flush();
+    // Flush the completed commands to compile_commands.json
     flushCompletedCommands();
 
     if (!File.outstanding.length) {
