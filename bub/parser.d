@@ -280,10 +280,18 @@ string resolveCommand(string command, string[string] extras, string[] sysLibFlag
 // In-project files have relative paths, and system files have
 // absolute paths.
 //
-// The deps output contains either:
+// The deps output is expected to contain either:
 // * A lot of junk with paths of interest in parentheses, or
 // * Leading junk terminated with a colon, then just the paths,
 //   possibly with backslashes escaping newlines.
+//
+// The two formats are what is produced by the dmd D compiler and C/C++
+// compilers respectively. For project-specific tools that produce dependencies,
+// the preferred format is the latter. For example:
+//
+//   target-path(s) : path-1 path-2 ... path-n
+//
+// FIXME this implementation doesn't handle spaces in filenames, and maybe it should.
 //
 string[] parseDeps(string path, string[] inputs) {
     bool[string] got;

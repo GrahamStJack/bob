@@ -95,7 +95,6 @@ void doWork(bool printActions, uint index) {
             }
             catch (Exception ex) {
                 say("%s: FAILED\n%s\n%s", action, command, ex.msg);
-                ownerTid.send(true);
                 throw new BailException();
             }
         }
@@ -180,7 +179,6 @@ void doWork(bool printActions, uint index) {
                         }
                     }
                 }
-                ownerTid.send(true);
                 say("%s: FAILED\n%s", action, command);
             }
             throw new BailException();
@@ -227,4 +225,10 @@ void doWork(bool printActions, uint index) {
     }
     catch (BailException ex) {}
     catch (Exception ex) { /*fatal("Got unexpected exception %s :\n%s", ex.msg, ex.info);*/ }
+
+    try {
+        ownerTid.send(true);
+    }
+    catch (Exception ex) {}
+
 }
