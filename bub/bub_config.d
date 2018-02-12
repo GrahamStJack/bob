@@ -244,9 +244,9 @@ void establishBuildDir(string          buildDir,
 
 
     // Create environment file.
-    string bin  = buildPath("dist", "bin");
-    string data = buildPath("dist", "data");
-    string env  = buildPath(buildDir, "environment");
+    string bin   = buildNormalizedPath(getcwd, buildDir, "dist", "bin");
+    string data  = buildNormalizedPath(getcwd, buildDir, "dist", "data");
+    string env   = buildPath(buildDir, "environment");
     string envText;
     version(Posix) {
         envText ~= "#!/bin/bash\n";
@@ -270,11 +270,13 @@ void establishBuildDir(string          buildDir,
 
     // Create run script
     version(Posix) {
+        string tmp = buildNormalizedPath(getcwd, buildDir, "tmp");
         string runText =
-            "#!/bin/bash\n" ~
-            "source environment\n" ~
-            "export TMP_PATH=\"tmp/tmp-$(basename \"${1}\")\"\n" ~
-            "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec \"$@\"\n";
+            format("#!/bin/bash\n" ~
+                   "source environment\n" ~
+                   "export TMP_PATH=\"%s/tmp-$(basename \"${1}\")\"\n" ~
+                   "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec \"$@\"\n",
+                   tmp);
         update(buildPath(buildDir, "run"), runText, true);
     }
     version(Windows) {

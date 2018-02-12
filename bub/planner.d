@@ -153,7 +153,9 @@ class DependencyCache {
         foreach (dep; deps) {
             content ~= " " ~ dep;
         }
-        content = content[1..$];
+        if (!content.empty) {
+            content = content[1..$];
+        }
 
         string path    = prefix ~ builtPath;
         string tmpPath = path ~ ".tmp";
@@ -392,9 +394,6 @@ final class Action {
         }
 
         command = resolveCommand(command, extras, sysLibFlags);
-        if (name.startsWith("Generate")) {
-            say("Completed command %s is %s", name, command);
-        }
     }
 
     // issue this action
