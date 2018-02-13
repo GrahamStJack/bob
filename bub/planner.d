@@ -683,8 +683,8 @@ class File : Node {
         bool[string] isInput;
         foreach (input; inputs) isInput[input] = true;
         foreach (dep; deps) {
-            if (!dep.isAbsolute && dep.dirName != "." && dep !in isInput) {
-                // dep is an in-project source file not in "." that isn't one of the inputs
+            if (!dep.isAbsolute && dep.dirName != "." && dep !in isInput && dep != path) {
+                // dep is an in-project source file not in "." that isn't one of the inputs or this file
                 File* depend = dep in File.byPath;
                 errorUnless(depend !is null, origin, "%s depends on unknown '%s'", this, dep);
                 if (g_print_deps && this !in depend.dependedBy) {
