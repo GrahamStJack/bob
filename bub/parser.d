@@ -31,6 +31,7 @@ import std.path;
 import std.string;
 import std.process;
 import std.algorithm;
+import std.exception;
 
 static import std.array;
 
@@ -277,28 +278,22 @@ string resolveCommand(string command, string[string] extras, string[] sysLibFlag
 // Read paths for files depended on from a deps output and return them,
 // together with the inputs used to produce the output files.
 //
-// In-project files have relative paths, and system files have
-// absolute paths.
+// Any out-of-project dependencies are discarded.
 //
 // The deps output is expected to contain either:
 // * A lot of junk with paths of interest in parentheses, or
 // * Leading junk terminated with a colon, then just the paths,
-//   possibly with backslashes escaping newlines.
+//   possibly with backslashes escaping newlines, or
+// * Just the whitespace-separated paths.
 //
-// The two formats are what is produced by the dmd D compiler and C/C++
-// compilers respectively. For project-specific tools that produce dependencies,
-// the preferred format is the latter. For example:
+// The first two formats are produced by the dmd D compiler and C/C++
+// compilers respectively. The third format is supported as a convenient format
+// for in-project generation tools.
 //
-//   target-path(s) : path-1 path-2 ... path-n
-//
-// FIXME this implementation doesn't handle spaces in filenames, and maybe it should.
+// Note that spaces in paths are only supported in the first format.
 //
 string[] parseDeps(string path, string[] inputs) {
-    bool[string] got;
-
-    foreach (input; inputs) {
-        got[input] = true;
-    }
+    string[] deps;
 
     if (path.exists) {
         auto content = path.readText;
@@ -306,7 +301,9 @@ string[] parseDeps(string path, string[] inputs) {
 
         bool parens;
         foreach (ch; content) {
-            if (ch == '\\') break;
+            if (ch == '\\') {
+                break;
+            }
             if (ch == '(') {
                 parens = true;
                 break;
@@ -315,29 +312,59 @@ string[] parseDeps(string path, string[] inputs) {
 
         if (parens) {
             // The paths are enclosed in parentheses
-            foreach (word; content.splitter(' ')) {
-                if (word.length > 2 && word[0] == '(' && word[$-1] == ')') {
-                    got[word[1..$-1]] = true;
+            size_t anchor;
+            bool   inWord;
+            foreach (i, ch; content) {
+                if (ch == '(') {
+                    enforce(!inWord);
+                    inWord = true;
+                    anchor = i + 1;
+                }
+                else if (ch == ')') {
+                    enforce(inWord);
+                    if (i > anchor) {
+                        deps ~= content[anchor..i].dup;
+                    }
                 }
             }
         }
         else {
-            // Everything after the first ':' except backslashes are paths
-            bool started;
-            foreach (word; content.splitter(' ')) {
-                if (started) {
-                    word = word.strip;
-                    if (word.length > 0 && word[0] != '\\') {
-                        got[word] = true;
-                    }
+            // Everything except backslashes are paths, other than any paths
+            // preceding the first colon in the file
+            bool   seenFirstColon;
+            size_t anchor;
+            bool   inWord;
+            foreach (i, ch; content) {
+                if (ch == ':' && !seenFirstColon) {
+                    // First colon in file - discard anything already found
+                    seenFirstColon = true;
+                    deps = [];
+                    inWord = false;
                 }
-                else if (word[$-1] == ':') {
-                    started = true;
+                else if (!inWord && !ch.isWhite && ch != '\\') {
+                    inWord = true;
+                    anchor = i;
+                }
+                else if (inWord && (ch.isWhite || ch == '\\')) {
+                    inWord = false;
+                    enforce(i > anchor);
+                    deps ~= content[anchor..i].dup;
                 }
             }
         }
     }
 
+    // Remove duplicates and out-of-project paths, then return the result
+    bool[string] got;
+    foreach (input; inputs) {
+        got[input] = true;
+    }
+    string cwd = getcwd;
+    foreach (dep; deps) {
+        if (buildNormalizedPath(cwd, dep).startsWith(cwd)) {
+            got[dep] = true;
+        }
+    }
     return got.keys();
 }
 

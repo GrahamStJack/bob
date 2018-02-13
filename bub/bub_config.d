@@ -66,7 +66,7 @@ version(Posix) {
     string ENV_DELIM  = ":";
     string ENV_PREFIX = "";
 
-    string CLEAN_TEXT = "rm -rf dist priv obj tmp\n";
+    string CLEAN_TEXT = "rm -rf dist priv obj deps tmp\n";
 }
 version(Windows) {
     // Set the mode of a file
