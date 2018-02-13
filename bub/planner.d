@@ -446,7 +446,6 @@ class Node {
     Node    parent;
     Privacy privacy;
     Node[]  children;
-    Node[]  refers;
 
     override string toString() const {
         return trail;
@@ -1585,6 +1584,7 @@ void cleandirs() {
 //
 
 string[string] completedCommands; // command text by the source file's path
+bool[Pkg][Pkg] pkgDepends;        // packages that a package depends on
 
 void accumulateCompletedCommand(Action action) {
     assert(action.completed);
@@ -1594,6 +1594,20 @@ void accumulateCompletedCommand(Action action) {
     {
         // This command will be of interest to tools that want to grok the source - accumulate it
         completedCommands[action.depends[0].path] = action.command;
+    }
+
+    // Accumulate package dependencies implied by this completed command
+    Pkg  targetPkg = Pkg.getPkgOf(action.builds[0]);
+    auto depends   = targetPkg in pkgDepends;
+    if (depends is null) {
+        pkgDepends[targetPkg] = null;
+        depends = targetPkg in pkgDepends;
+    }
+    foreach (depend; action.depends) {
+        auto dependPkg = Pkg.getPkgOf(depend);
+        if (dependPkg !is targetPkg) {
+            (*depends)[dependPkg] = true;
+        }
     }
 }
 
@@ -1625,6 +1639,51 @@ void flushCompletedCommands() {
     }
     content ~= "\n]";
 
+    if (!file.exists || content != file.readText) {
+        tmp.write(content);
+        tmp.rename(file);
+    }
+}
+
+void flushPkgDepends() {
+    string     file = "package-depends";
+    string     tmp  = file ~ ".tmp";
+    string     content;
+    Pkg[][Pkg] result;
+    Pkg[]      order;
+
+    // Prepare the result, cleaning out pkgDepends as we go
+    while (pkgDepends.length > 0) {
+        foreach (pkg, depends; pkgDepends) {
+            if (depends.length == 0) {
+                // Low-level package - put into result
+                foreach (pkg2, depends2; pkgDepends) {
+                    if (pkg in depends2) {
+                        depends2.remove(pkg);
+                        result[pkg2] ~= pkg;
+                    }
+                }
+                // And remove it from pkgDepends
+                pkgDepends.remove(pkg);
+                order ~= pkg;
+                break;
+            }
+        }
+    }
+
+    // Convert to text
+    foreach (pkg; order) {
+        content ~= pkg.trail ~ " ->";
+        auto depends = pkg in result;
+        if (depends) {
+            foreach (depend; *depends) {
+                content ~= " " ~ depend.trail;
+            }
+        }
+        content ~= "\n";
+    }
+
+    // Write to file
     if (!file.exists || content != file.readText) {
         tmp.write(content);
         tmp.rename(file);
@@ -1713,6 +1772,9 @@ bool doPlanning(Tid[] workerTids) {
 
     // Flush the completed commands to compile_commands.json
     flushCompletedCommands();
+
+    // Flush the complete package dependency information to package-dependencies
+    flushPkgDepends();
 
     if (!File.outstanding.length) {
 
