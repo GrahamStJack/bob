@@ -151,10 +151,9 @@ class DependencyCache {
 
         string content;
         foreach (dep; deps) {
-            content ~= " " ~ dep;
-        }
-        if (!content.empty) {
-            content = content[1..$];
+            if (dep != builtPath) {
+                content ~= dep ~ "\n";
+            }
         }
 
         string path    = prefix ~ builtPath;
@@ -567,19 +566,20 @@ class File : Node {
     static int             nextNumber;
 
     // Statistics
-    static uint numBuilt;   // number of files targeted
-    static uint numUpdated; // number of files successfully updated by actions
+    static uint numBuilt;      // number of files targeted
+    static uint numUpdated;    // number of files successfully updated by actions
 
     Origin     origin;
-    string     path;        // the file's path
-    int        number;      // order of file creation
-    bool       built;       // true if this file will be built by an action
-    Action     action;      // the action used to build this file (null if non-built)
+    string     path;           // the file's path
+    int        number;         // order of file creation
+    int        translateGroup; // identifies the translation group of the file, if any
+    bool       built;          // true if this file will be built by an action
+    Action     action;         // the action used to build this file (null if non-built)
 
-    long       modTime;     // the modification time of this file
-    bool       used;        // true if this file has been used already
-    bool       augmented;   // true if augmentAction() has already been called and returned true
-    bool[File] dependedBy;  // Files that depend on this
+    long       modTime;        // the modification time of this file
+    bool       used;           // true if this file has been used already
+    bool       augmented;      // true if augmentAction() has already been called and returned true
+    bool[File] dependedBy;     // Files that depend on this
 
     // return a prospective path to a potential file.
     static string prospectivePath(string start, Node parent, string extra) {
@@ -789,8 +789,13 @@ class File : Node {
         Pkg  otherPkg       = Pkg.getPkgOf(other);
         Node commonAncestor = commonAncestorWith(other);
 
-        errorUnless(this.number > other.number || other.isDescendantOf(this), origin,
-                    "%s cannot depend on later-defined %s", this, other);
+        errorUnless(this.number > other.number ||
+                    (this.translateGroup > 0 && this.translateGroup == other.translateGroup) ||
+                    other.isDescendantOf(this),
+                    origin,
+                    "%s cannot depend on later-defined %s",
+                    this,
+                    other);
         errorUnless(thisPkg is otherPkg || !thisPkg.isDescendantOf(otherPkg),
                     origin,
                     "%s (%s) cannot depend on %s (%s), whose package is an ancestor",
@@ -1323,7 +1328,14 @@ final class Exe : Binary {
 // * "translate doc : doc;" will translate all the files in doc into dist/doc
 // preserving any directory structure within doc.
 //
+// Dependency rules are relaxed slightly here to allow files added in a single call to
+// translateFile to depend on each other regardless of the order in which they are added.
+//
 void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
+    static int group;
+
+    ++group;
+
     string destDir  = dest == "" ? buildPath("priv", pkg.trail) : buildPath("dist", dest);
     string destOmit = "";
     if (buildPath("src", pkg.trail, name).isDir) {
@@ -1346,6 +1358,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
             // Create the source file
             string ext        = relative.extension;
             File   sourceFile = File.addSource(origin, pkg, relative, Privacy.PUBLIC);
+            sourceFile.translateGroup = group;
 
             // Determine the destination path for a copy
             string copyPath = buildPath(destDir, relative[destOmit.length..$]);
@@ -1355,6 +1368,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
                 // Target is a simple copy of source file, preserving execute permission
                 string fileName = copyPath.replace("/", "__") ~ "-copy";
                 File destFile = new File(origin, pkg, fileName, Privacy.PUBLIC, copyPath, true);
+                destFile.translateGroup = group;
                 destFile.action = new Action(origin,
                                             pkg,
                                             format("%-15s %s", "Copy", destFile.path),
@@ -1369,6 +1383,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
                 foreach (suffix; generate.suffixes) {
                     string path = copyPath.stripExtension ~ suffix;
                     File gen = new File(origin, pkg, path.baseName, Privacy.PRIVATE, path, true);
+                    gen.translateGroup = group;
                     files    ~= gen;
                     suffixes ~= suffix ~ " ";
                 }
@@ -1745,8 +1760,8 @@ bool doPlanning(Tid[] workerTids) {
 
             if (idle.length == workerTids.length) {
                 fatal("Nothing to do with %s outstanding and no inflight actions - " ~
-                      "something is wrong",
-                      File.outstanding.length);
+                      "something is wrong, Outstanding are: %s",
+                      File.outstanding.length, File.outstanding.keys);
             }
 
             // Wait for a worker to report back.
