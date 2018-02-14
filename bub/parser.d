@@ -351,6 +351,9 @@ string[] parseDeps(string path, string[] inputs) {
                     deps ~= content[anchor..i].dup;
                 }
             }
+            if (inWord) {
+                deps ~= content[anchor..$].dup;
+            }
         }
     }
 
