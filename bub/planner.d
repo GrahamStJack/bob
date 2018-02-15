@@ -724,9 +724,11 @@ class File : Node {
             if (action.nextGenerateIndex < action.generateNumbers.length &&
                 action.number > action.generateNumbers[action.nextGenerateIndex])
             {
-                // Wait even though this file might already be up to date,
+                // Wait even though this file might already be up to date or buildable,
                 // as it is cheaper to do this check than the depend one, and
-                // this function may be called many times.
+                // this function may be called many times - and more importantly,
+                // we may have dependencies that we don't yet know about that aren't
+                // generated yet.
                 wait = true;
                 if (g_print_deps) say("%s [%s] waiting for generated files", path, action.number);
             }
@@ -790,7 +792,7 @@ class File : Node {
         Node commonAncestor = commonAncestorWith(other);
 
         errorUnless(this.number > other.number ||
-                    (this.translateGroup > 0 && this.translateGroup == other.translateGroup) ||
+                    (!other.built && this.translateGroup > 0 && this.translateGroup == other.translateGroup) ||
                     other.isDescendantOf(this),
                     origin,
                     "%s cannot depend on later-defined %s",
@@ -1375,6 +1377,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
                                             "COPY ${INPUT} ${OUTPUT}",
                                             [destFile],
                                             [sourceFile]);
+                destFile.action.setGenerate;
             }
             else {
                 // Generate the target file(s) using a configured command
@@ -1394,6 +1397,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
                                             generate.command,
                                             files,
                                             [sourceFile]);
+                genAction.setGenerate;
                 foreach (gen; files) {
                     gen.action = genAction;
                 }
@@ -1438,6 +1442,7 @@ void generateFile(ref Origin origin,
                                commandLine,
                                [target],
                                inputs);
+    action.setGenerate;
     target.action = action;
 }
 
