@@ -362,10 +362,12 @@ string[] parseDeps(string path, string[] inputs) {
     foreach (input; inputs) {
         got[input] = true;
     }
-    string cwd = getcwd;
+    string cwd = getcwd ~ dirSeparator;
     foreach (dep; deps) {
-        if (buildNormalizedPath(cwd, dep).startsWith(cwd)) {
-            got[dep] = true;
+        string abs = buildNormalizedPath(cwd, dep);
+        if (abs.startsWith(cwd)) {
+            string rel = abs[cwd.length..$];
+            got[rel] = true;
         }
     }
     return got.keys();
