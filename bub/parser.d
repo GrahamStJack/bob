@@ -322,6 +322,7 @@ string[] parseDeps(string path, string[] inputs) {
                 }
                 else if (ch == ')') {
                     enforce(inWord);
+                    inWord = false;
                     if (i > anchor) {
                         deps ~= content[anchor..i].dup;
                     }

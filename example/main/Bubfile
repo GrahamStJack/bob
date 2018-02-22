@@ -1,9 +1,9 @@
 # Copy/generate-from everything in the doc subdirectory
 # into priv/main/doc
-misc doc;
+translate doc;
 
 # Copy script1 and script2 into dist/bin, and make it executable.
-misc script1 script2 : bin;
+translate script1 script2 : bin;
 
 # Copy sample1.data and sample1.data into dist/data
-misc sample.data : data;
+translate sample.data : data;
