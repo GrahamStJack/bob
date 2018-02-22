@@ -1298,12 +1298,13 @@ final class DynamicLib : File {
     StaticLib[] staticLibs;
     string      sourceExt;
 
-    this(ref Origin origin_, Pkg pkg, string name_, string[] staticTrails) {
+    this(ref Origin origin_, Pkg pkg, string name_, string[] staticTrails, string[] destDirs) {
         origin = origin_;
 
         uniqueName = std.array.replace(buildPath(pkg.trail, name_), dirSeparator, "-");
         if (name_ == pkg.name) uniqueName = std.array.replace(pkg.trail, dirSeparator, "-");
-        string _path = buildPath("dist", "lib", format("lib%s.so", uniqueName));
+        string subdir = destDirs.length > 0 ? destDirs[0] : "lib";
+        string _path = buildPath("dist", subdir, format("lib%s.so", uniqueName));
         version(Windows) {
             _path = _path.setExtension(".dll");
         }
@@ -1583,10 +1584,15 @@ void processBubfile(string indent, Pkg pkg) {
             {
                 errorUnless(statement.targets.length == 1, statement.origin,
                             "Can only have one dynamic-lib name per statement");
+                errorUnless(statement.arg1.length > 0, statement.origin,
+                            "Must have at least one static lib specified");
+                errorUnless(statement.arg2.length <= 1, statement.origin,
+                            "Cannot specify multiple destination directories");
                 new DynamicLib(statement.origin,
                                pkg,
                                statement.targets[0],
-                               statement.arg1);
+                               statement.arg1,
+                               statement.arg2);
             }
             break;
 
