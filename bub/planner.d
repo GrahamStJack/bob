@@ -175,10 +175,10 @@ class DependencyCache {
 // might be absent or stale at the time DEPS information is generated.
 //
 final class Action {
+    static Action[]             ordered;
     static Action[string]       byName;
     static int                  nextNumber;
-    static int[]                generateNumbers;   // Numbers of all the generate actions
-    static int                  nextGenerateIndex; // The index of the next generate action
+    static Action[]             pendingGenerators; // The generate actions, in ascending order
     static long[string]         systemModTimes;    // Mod times of system files
     static PriorityQueue!Action queue;
 
@@ -192,16 +192,19 @@ final class Action {
     long     newest;      // The modification time of the newest system file depended on
     string[] libs;        // The contents of this action's LIBS
     string[] sysLibFlags; // The flags to tack on because of syslibs that are depended on
+    Action   blockedBy;   // The generate action that blocks this one
     bool     completed;   // True if the action has been completed
-    bool     issued;      // True if the action has been issued to a worker
+    bool     dirty;       // True if the action needs to be executed by a worker
+    bool     issued;      // True if the action has been queued for processing
 
     this(Origin origin_, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
-        origin  = origin;
-        name    = name_;
-        command = command_;
-        number  = nextNumber++;
-        inputs  = inputs_;
-        builds  = builds_;
+        origin   = origin;
+        name     = name_;
+        command  = command_;
+        number   = nextNumber++;
+        inputs   = inputs_;
+        builds   = builds_;
+        ordered ~= this;
         errorUnless(name !in byName, origin, "Duplicate command name=%s", name);
         byName[name] = this;
 
@@ -304,36 +307,57 @@ final class Action {
         }
     }
 
-    // Flag this action as generating source files
+    // Flag this action as generating files that may be used as source files
     void setGenerate() {
-        generateNumbers ~= number;
+        pendingGenerators ~= this;
     }
 
-    // Flag this action as done, attempting to issue any actions waiting on it
+    // Return true if this action is blocked by lower-numbered actions flagged via setGenerate
+    bool isBlockedByGeneratedFile() {
+        if (blockedBy !is null) {
+            // We already know who blocks us - we remain blocked until blockedBy is cleared
+            return true;
+        }
+        else if (pendingGenerators.length > 0 && pendingGenerators[0].number < number) {
+            // We are blocked - determine by what
+            foreach (candidate; pendingGenerators) {
+                if (candidate.number < number) {
+                    blockedBy = candidate;
+                }
+                else {
+                    break;
+                }
+            }
+            return true;
+        }
+        else {
+            // Not blocked
+            return false;
+        }
+    }
+
+    // Flag this action as done, and if this is a generate action, attempt to issue any
+    // actions blocked by it.
+    //
+    // Note: generate actions are issued in monotonically increasing order, as they
+    // block higher-numbered actions of any kind.
     void done() {
         assert(completed);
         issued = true;
-        if (nextGenerateIndex >= generateNumbers.length ||
-            number == generateNumbers[nextGenerateIndex])
-        {
-            // This is the next generate action - attempt to issue any actions with numbers
-            // less than ours, as this is the first time we can be sure that all the generated files
-            // those commands may be waiting for have been generated.
-            if (nextGenerateIndex < generateNumbers.length) nextGenerateIndex++;
-            int fence =
-                nextGenerateIndex < generateNumbers.length ?
-                generateNumbers[nextGenerateIndex] :
-                int.max;
-            File[] candidates;
-            foreach (file, dummy; File.outstanding) {
-                if (file.action !is null &&
-                    !file.action.issued &&
-                    file.action.number <= fence)
-                {
-                    candidates ~= file;
+        if (pendingGenerators.length > 0 && pendingGenerators[0] is this) {
+            // This is the next generate action, so any actions blocked on us are no longer
+            // blocked, and all the files they generate need to be checked to see if
+            // the actions can be issued
+            pendingGenerators = pendingGenerators[1..$];
+            File[] files;
+            int fence = pendingGenerators.length == 0 ? nextNumber : pendingGenerators[0].number + 1;
+            foreach (other; ordered[number+1..fence]) {
+                other.blockedBy = null;
+                foreach (file; other.builds) {
+                    files ~= file;
                 }
             }
-            foreach (file; candidates) {
+            foreach (file; files) {
                 file.issueIfReady();
             }
         }
@@ -396,9 +420,10 @@ final class Action {
     }
 
     // issue this action
-    void issue() {
+    void issue(bool dirty_) {
         assert(completed);
         assert(!issued);
+        dirty  = dirty_;
         issued = true;
         queue.insert(this);
     }
@@ -560,6 +585,7 @@ final class Pkg : Node {
 //
 class File : Node {
     static DependencyCache cache;       // Cache of information gleaned from ${DEPS} in commands
+    static File[]          ordered;     // Files in increasing "number" order
     static File[string]    byPath;      // Files by their path
     static bool[File]      allBuilt;    // all built files
     static bool[File]      outstanding; // outstanding buildable files
@@ -600,6 +626,7 @@ class File : Node {
         modTime   = path.modifiedTime(built);
 
         errorUnless(path !in byPath, origin, "%s already defined", path);
+        ordered     ~= this;
         byPath[path] = this;
 
         if (built) {
@@ -721,14 +748,10 @@ class File : Node {
             bool dirty = action.newest > modTime;
             if (dirty && g_print_deps) say("%s system dependencies are younger", this);
 
-            if (action.nextGenerateIndex < action.generateNumbers.length &&
-                action.number > action.generateNumbers[action.nextGenerateIndex])
-            {
-                // Wait even though this file might already be up to date or buildable,
-                // as it is cheaper to do this check than the depend one, and
-                // this function may be called many times - and more importantly,
-                // we may have dependencies that we don't yet know about that aren't
-                // generated yet.
+            if (action.isBlockedByGeneratedFile) {
+                // Wait even though this file might otherwise be up to date or buildable,
+                // as it might depend on a generated file that isn't yet built.
+                // We do this test before looking at action.depends as it is cheap.
                 wait = true;
                 if (g_print_deps) say("%s [%s] waiting for generated files", path, action.number);
             }
@@ -759,17 +782,13 @@ class File : Node {
                 }
             }
             if (!wait) {
+                // Complete and issue the action, regardless of whether this file is dirty or not.
+                // When the action is taken off the priority queue, it given to a worker if dirty,
+                // and otherwise upTodate() is called. We do this because calling upToDate() here
+                // would cause unboundedly deep recursion.
                 action.complete();
                 accumulateCompletedCommand(action);
-                if (dirty) {
-                    // Out of date - issue the action
-                    action.issue();
-                }
-                else {
-                    // Up to date - no need for building
-                    if (g_print_deps) say("%s is already up to date", path);
-                    upToDate();
-                }
+                action.issue(dirty);
             }
         }
     }
@@ -1733,9 +1752,17 @@ bool doPlanning(Tid[] workerTids) {
         // Now that we know about all the files and have the mostly-complete
         // dependency graph (what libraries to link is still uncertain), issue
         // all the actions we can, which is enough to trigger building everything.
-        foreach (path, file; File.byPath) {
+        foreach (file; File.ordered) {
             if (file.built) {
                 file.issueIfReady();
+                if (Action.pendingGenerators.length > 0 &&
+                    file.action is Action.pendingGenerators[0])
+                {
+                    // This is the first generate action. All subsequent actions are
+                    // blocked by this or following generate actions, so there is no point
+                    // in going any further now.
+                    break;
+                }
             }
         }
 
@@ -1744,23 +1771,41 @@ bool doPlanning(Tid[] workerTids) {
         for (uint index = 0; index < workerTids.length; ++index) idle.insert(index);
 
         while (File.outstanding.length) {
-            // Send actions till there are no idle workers or no more issued actions.
+            // Send actions till there are no idle workers or no more queued actions.
+            bool didSend;
             while (!idle.empty && !Action.queue.empty) {
                 const Action next = Action.queue.front;
                 Action.queue.popFront();
 
-                string targets;
-                foreach (target; next.builds) {
-                    ensureParent(target.path);
-                    if (targets.length > 0) {
-                        targets ~= "|";
+                if (next.dirty) {
+                    // Pass the action to a worker
+                    string targets;
+                    foreach (target; next.builds) {
+                        ensureParent(target.path);
+                        if (targets.length > 0) {
+                            targets ~= "|";
+                        }
+                        targets ~= target.path;
                     }
-                    targets ~= target.path;
-                }
 
-                int index = idle.front;
-                idle.popFront();
-                workerTids[index].send(next.name, next.command, targets);
+                    int index = idle.front;
+                    idle.popFront();
+                    workerTids[index].send(next.name, next.command, targets);
+                    didSend = true;
+                }
+                else {
+                    // The action doesn't need to be performed - mark all its targets as up to date,
+                    // which will either put more actions on the queue or clean out outstanding.
+                    auto action = Action.byName[next.name];
+                    foreach (target; action.builds) {
+                        target.upToDate();
+                    }
+                }
+            }
+
+            if (!didSend) {
+                // Don't wait for a worker to report back because we didn't send
+                continue;
             }
 
             if (idle.length == workerTids.length) {
