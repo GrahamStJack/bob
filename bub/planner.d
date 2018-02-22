@@ -182,20 +182,21 @@ final class Action {
     static long[string]         systemModTimes;    // Mod times of system files
     static PriorityQueue!Action queue;
 
-    Origin   origin;
-    string   name;        // The name of the action
-    string   command;     // The action command-string
-    int      number;      // Influences build order
-    File[]   inputs;      // The files that constitute this action's INPUT
-    File[]   builds;      // Files that constitute this action's OUTPUT
-    File[]   depends;     // Files that the action depend on
-    long     newest;      // The modification time of the newest system file depended on
-    string[] libs;        // The contents of this action's LIBS
-    string[] sysLibFlags; // The flags to tack on because of syslibs that are depended on
-    Action   blockedBy;   // The generate action that blocks this one
-    bool     completed;   // True if the action has been completed
-    bool     dirty;       // True if the action needs to be executed by a worker
-    bool     issued;      // True if the action has been queued for processing
+    Origin     origin;
+    string     name;        // The name of the action
+    string     command;     // The action command-string
+    int        number;      // Influences build order
+    File[]     inputs;      // The files that constitute this action's INPUT
+    File[]     builds;      // Files that constitute this action's OUTPUT
+    File[]     depends;     // Files that the action depends on
+    bool[File] weakDepends; // Flags a depends as being non-dirtying
+    long       newest;      // The modification time of the newest system file depended on
+    string[]   libs;        // The contents of this action's LIBS
+    string[]   sysLibFlags; // The flags to tack on because of syslibs that are depended on
+    Action     blockedBy;   // The generate action that blocks this one
+    bool       completed;   // True if the action has been completed
+    bool       dirty;       // True if the action needs to be executed by a worker
+    bool       issued;      // True if the action has been queued for processing
 
     this(Origin origin_, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
         origin   = origin;
@@ -300,11 +301,12 @@ final class Action {
         return added;
     }
 
-    void addLaterDependency(File depend) {
+    bool addLaterDependency(File depend) {
         bool added = addDependency(depend);
         if (added && builds.length > 1) {
            fatal("Cannot add a later dependency to an action that builds more than one file: %s", name);
         }
+        return added;
     }
 
     // Flag this action as generating files that may be used as source files
@@ -604,7 +606,7 @@ class File : Node {
 
     long       modTime;        // the modification time of this file
     bool       used;           // true if this file has been used already
-    bool       augmented;      // true if augmentAction() has already been called and returned true
+    bool       augmented;      // true if augmentAction() has already been called and returned false
     bool[File] dependedBy;     // Files that depend on this
 
     // return a prospective path to a potential file.
@@ -757,13 +759,13 @@ class File : Node {
             }
             else {
                 foreach (depend; action.depends) {
-                    if (depend.action) {
+                    if (depend.action !is null) {
                         if (g_print_deps) say("%s waiting for %s", this, depend);
                         wait = true;
                         break;
                     }
                     else if (!dirty) {
-                        if (depend.modTime > modTime) {
+                        if (depend.modTime > modTime && depend !in action.weakDepends) {
                             if (g_print_deps) say("%s dependency %s is younger", this, depend);
                             dirty = true;
                             // Don't break here, because other dependencies may force us to wait
@@ -775,10 +777,11 @@ class File : Node {
                 if (!wait && !augmented) {
                     // All our currently known dependencies are satisfied but we aren't yet sure
                     // we know what all our dependencies are - add any more that we can now,
-                    // and go around again to check if we can issue our action yet.
-                    augmented = augmentAction();
-                    issueIfReady();
-                    return;
+                    // and if they aren't already satisfied, we still have to wait.
+                    wait = augmentAction();
+                    if (!wait) {
+                        augmented = true;
+                    }
                 }
             }
             if (!wait) {
@@ -793,15 +796,15 @@ class File : Node {
         }
     }
 
-    // Update this File's dependencies, returning true if all dependencies are now known.
-    // Called when the last of this File's currently known dependencies are up to date.
-    // Once true is returned, it isn't called again.
+    // Update this File's dependencies, returning true if dependencies have been added
+    // that are not yet satisfied. Called once when the last of this File's originally
+    // known dependencies are up to date.
     //
     // File specialisations that use the DependencyCache to determine things like
     // dependencies on libraries and what libraries to link with should specialise
     // this function.
     bool augmentAction() {
-        return true;
+        return false;
     }
 
     // Check that this file can depend on other
@@ -993,11 +996,229 @@ abstract class Binary : File {
 
 
 //
+// Free function used by StaticLib, DynamicLib and Exe to finalise their actions
+// by examining the now up-to-date dependency cache information in their
+// object files, and adding any found dependencies on libaries, plus the
+// names of those libraries and any associated compile-time flags, to the
+// action that builds the target.
+//
+// objs are the object files that the target file explicitly contains. It
+// is these that we look for cached dependency information on.
+//
+// Rules are also enforced:
+//
+// * The usual dependency rules.
+//
+// * If preventStaticLibs, StaticLibs aren't allowed as new dependencies.
+//
+// Returns true if this call adds dependencies that are not yet satisfied.
+//
+bool doAugmentAction(File target) {
+    auto exe        = cast(Exe) target;
+    auto staticLib  = cast(StaticLib) target;
+    auto binary     = cast(Binary) target;
+    auto dynamicLib = cast(DynamicLib) target;
+
+    StaticLib[] directStaticLibs; // The static libs that target depends on
+
+    //
+    // Populate directStaticLibs with the target's direct static lib dependencies,
+    // returning true if a new dependency is added that isn't yet satisfied.
+    //
+
+    if (binary !is null) {
+        // Find out what StaticLibs the target binary depends on via its object file's
+        // dependencies, and add those dependencies to it
+        bool[Object] done;
+        foreach (obj; binary.objs) {
+            auto paths = obj.path in File.cache.dependencies;
+            if (paths !is null) {
+                foreach (path; *paths) {
+                    if (!path.isAbsolute && path.dirName != ".") {
+                        auto depend = path in File.byPath;
+                        if (depend !is null) {
+                            auto binaryDepend = *depend in Binary.byContent;
+                            errorUnless(binaryDepend !is null, obj.origin,
+                                        "%s depends on %s, which isn't contained by something",
+                                        target, obj, *depend);
+
+                            if (*binaryDepend !is target && *binaryDepend !in done) {
+                                // binaryDepend is a StaticLib that isn't the target - we depend on it
+                                auto slib = cast(StaticLib*) binaryDepend;
+                                errorUnless(slib !is null, binaryDepend.origin,
+                                            "Expected %s to be a StaticLib", *binaryDepend);
+                                done[*slib] = true;
+                                if (target.action.addLaterDependency(*slib)) {
+                                    if (staticLib !is null) {
+                                        target.action.weakDepends[*slib] = true;
+                                    }
+                                    if (slib.action !is null) {
+                                        // The dependency isn't yet satisfied - we have to try again later
+                                        if (g_print_deps) say("%s depends on %s, which is not ready", target, *slib);
+                                        return true;
+                                    }
+                                }
+                                directStaticLibs ~= *slib;
+                            }
+                        }
+                        else {
+                            say("Ignoring dependency of %s on unknown file %s", obj, path);
+                        }
+                    }
+                }
+            }
+        }
+
+        if (staticLib !is null) {
+            // Stash the now completely known static lib dependencies for later use by higher-level targets
+            staticLib.reqStaticLibs = directStaticLibs;
+        }
+    }
+    else {
+        errorUnless(dynamicLib !is null, target.origin, "Expected %s to be a dynamic lib", target);
+        directStaticLibs = dynamicLib.staticLibs;
+    }
+
+    if (staticLib !is null) {
+        // Nothing more to do for static libs, which don't have a link step as such
+        return false;
+    }
+
+    //
+    // Translate direct static libs into a rolled-up list of all the libraries
+    // that the target will need to link with, returning true if an unsatisfied depedency
+    // on a dynamic lib is added
+    //
+
+    bool[Object] done;
+    StaticLib[]  neededStaticLibs;
+    DynamicLib[] neededDynamicLibs;
+    SysLib[]     neededSysLibs;
+
+    // Accumulate the consequences of a static lib
+    bool accumulate(StaticLib slib) {
+        if (slib !in done) {
+            done[slib] = true;
+            errorUnless(slib.action is null, target.origin,
+                        "Expected %s dependency %s to be up to date",
+                        target, slib);
+            auto dlib = slib in DynamicLib.byContent;
+            if (dlib !is null && dlib.number < target.number) {
+                // Use *dlib instead of slib
+                if (*dlib !in done) {
+                    done[*dlib] = true;
+                    if (*dlib !is target) {
+                        neededDynamicLibs ~= *dlib;
+                        if (target.action.addLaterDependency(*dlib)) {
+                            if (dlib.action !is null) {
+                                if (g_print_deps) say("%s depends on %s, which is not ready", target, *dlib);
+                                return true;
+                            }
+                        }
+                    }
+                    // Recurse into dlib's contained static libs
+                    foreach (lib; dlib.staticLibs) {
+                        if (accumulate(lib)) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            else {
+                // slib isn't contained by a dynamic library that target is allowed to use.
+                // Use slib if target doesn't contain it (only dynamic libs contain static libs).
+                if (dynamicLib is null || dlib is null || *dlib !is target) {
+                    errorUnless(dynamicLib is null || slib.objs.length == 0, target.origin,
+                                "Dynamic library %s cannot link with static lib %s - add it to dynamic libraries",
+                                dynamicLib, slib);
+                    neededStaticLibs ~= slib;
+                }
+                // Regardless, recurse into slib's required static libs
+                foreach (lib; slib.reqStaticLibs) {
+                    if (accumulate(lib)) {
+                        return true;
+                    }
+                }
+            }
+            foreach (lib; slib.reqSysLibs.keys) {
+                if (lib !in done) {
+                    done[lib] = true;
+                    neededSysLibs ~= lib;
+                }
+            }
+        }
+        return false;
+    }
+
+    foreach (slib; directStaticLibs) {
+        if (accumulate(slib)) {
+            return true;
+        }
+    }
+
+    if (binary !is null) {
+        // We also need our own required system libs
+        foreach (lib; binary.reqSysLibs.keys) {
+            done[lib] = true;
+            neededSysLibs ~= lib;
+        }
+    }
+
+    // We have complete knowledge of what libraries are needed -
+    // add that information to the action
+
+    neededStaticLibs.sort();
+    neededDynamicLibs.sort();
+    neededSysLibs.sort();
+
+    string[] libs;
+    foreach (lib; neededStaticLibs) {
+        if (lib.objs.length > 0) {
+            libs ~= lib.uniqueName;
+        }
+    }
+    foreach (lib; neededDynamicLibs) {
+        libs ~= lib.uniqueName;
+    }
+
+    // Put together the link flags needed by all the SysLibs this Binary needs,
+    // eliminating duplicates while preserving order, which is highest to lowest.
+    string[]    sysLibFlags;
+    int[string] flagCounts;
+    foreach (lib; neededSysLibs) {
+        foreach (flag; sysLibDefinitions[lib.name].linkFlags) {
+            if (flag !in flagCounts) {
+                flagCounts[flag] = 0;
+            }
+            flagCounts[flag] = flagCounts[flag] + 1;
+        }
+    }
+    foreach (lib; neededSysLibs) {
+        foreach (flag; sysLibDefinitions[lib.name].linkFlags) {
+            if (flagCounts[flag] == 1) {
+                sysLibFlags ~= flag;
+            }
+            flagCounts[flag] = flagCounts[flag] - 1;
+        }
+    }
+
+    target.action.setLibs(libs, sysLibFlags);
+
+    if (g_print_deps) {
+        say("Augmented action of %s, libs=%s syslibs=%s", target, libs, sysLibFlags);
+    }
+
+    return false;
+}
+
+
+//
 // StaticLib - a static library.
 //
 final class StaticLib : Binary {
-    string uniqueName;
-    bool   isPublic;
+    string      uniqueName;
+    bool        isPublic;
+    StaticLib[] reqStaticLibs;
 
     this(ref Origin origin, Pkg pkg, string name_,
          string[] publicSources, string[] protectedSources, string[] sysLibs, bool isPublic_) {
@@ -1051,158 +1272,10 @@ final class StaticLib : Binary {
             }
         }
     }
-}
 
-
-// Free function used by DynamicLib and Exe to finalise their actions
-// by examining the now up-to-date dependency cache information and adding
-// any found dependencies on libaries, plus the names of those libraries
-// to the action.
-//
-// objs are the object files that the target file explicitly contains. It
-// is these that we look for cached dependency information on.
-//
-// Rules are also enforced:
-//
-// * The usual dependency rules.
-//
-// * If preventStaticLibs, StaticLibs aren't allowed as new dependencies.
-//
-// Returns true if dependencies are complete.
-//
-bool binaryAugmentAction(File target, File[] objs, bool preventStaticLibs) {
-    StaticLib[]  staticLibs;
-    DynamicLib[] dynamicLibs;
-    SysLib[]     sysLibs;
-    bool[Object] done;
-    bool         complete = true;
-
-    void accumulate(File file) {
-        if (file !in done) {
-            done[file] = true;
-            auto binary = file in Binary.byContent;
-            errorUnless(binary !is null, file.origin,
-                        "%s depends on %s, which isn't contained by something", target, file);
-
-            if (*binary !in done) {
-                done[*binary] = true;
-
-                // Add all the binary's sysLibs
-                foreach (lib, dummy; binary.reqSysLibs) {
-                    if (lib !in done) {
-                        done[lib] = true;
-                        sysLibs ~= lib;
-                    }
-                }
-
-                if (*binary !is target) {
-                    // Must be a StaticLib
-                    auto slib = cast(StaticLib*) binary;
-                    errorUnless(slib !is null, binary.origin, "Expected %s to be a StaticLib", binary);
-
-                    // Add this slib, or the dynamic lib that contains it
-                    auto dlib = *slib in DynamicLib.byContent;
-                    bool usedDlib;
-                    if (dlib is null || dlib.number > target.number) {
-                        errorUnless(!preventStaticLibs || slib.objs.length == 0, target.origin,
-                                "A dynamic library (%s) cannot link with a static lib (%s) - " ~
-                                "put the static lib into a dynamic-lib or explicitly contain it in %s",
-                                target, *slib, *slib);
-                        target.action.addLaterDependency(*slib);
-                        if (slib.objs.length > 0) {
-                            staticLibs ~= *slib;
-                        }
-                    }
-                    else if (*dlib !in done && *dlib !is target) {
-                        done[*dlib] = true;
-
-                        usedDlib = true;
-                        target.action.addLaterDependency(*dlib);
-                        dynamicLibs ~= *dlib;
-                    }
-
-                    if (usedDlib) {
-                        // Accumulate all the dependencies of all the contained static libs' objs
-                        foreach (containedSlib; dlib.staticLibs) {
-                            foreach (libObj; containedSlib.objs) {
-                                accumulate(libObj);
-                            }
-                        }
-                    }
-                    else {
-                        // Accumulate all the dependencies of the static lib
-                        foreach (libObj; slib.objs) {
-                            accumulate(libObj);
-                        }
-                    }
-                }
-            }
-
-            auto paths = file.path in File.cache.dependencies;
-            if (paths) {
-                foreach (path; *paths) {
-                    if (!path.isAbsolute && path.dirName != ".") {
-                        if (auto depend = path in File.byPath) {
-                            accumulate(*depend);
-                        }
-                        else {
-                            say("Ignoring dependency of %s on unknown file %s", file, path);
-                        }
-                    }
-                }
-            }
-            else if (file.action) {
-                if (g_print_deps) {
-                    say("Augmentation of %s incomplete because %s is not built yet", target, file);
-                }
-                complete = false;
-            }
-        }
+    override bool augmentAction() {
+        return doAugmentAction(this);
     }
-
-    foreach (obj; objs) {
-        accumulate(obj);
-        if (!complete) {
-            break;
-        }
-    }
-
-    staticLibs.sort();
-    dynamicLibs.sort();
-    sysLibs.sort();
-
-    string[] libs;
-    foreach (lib; staticLibs)  libs ~= lib.uniqueName;
-    foreach (lib; dynamicLibs) libs ~= lib.uniqueName;
-
-    // Put together the link flags needed by all the sysLibs this Binary needs,
-    // eliminating duplicates while preserving order, which is highest to lowest.
-    string[]    sysLibFlags;
-    int[string] flagCounts;
-    foreach (lib; sysLibs) {
-        foreach (flag; sysLibDefinitions[lib.name].linkFlags) {
-            if (flag !in flagCounts) {
-                flagCounts[flag] = 0;
-            }
-            flagCounts[flag] = flagCounts[flag] + 1;
-        }
-    }
-    foreach (lib; sysLibs) {
-        foreach (flag; sysLibDefinitions[lib.name].linkFlags) {
-            if (flagCounts[flag] == 1) {
-                sysLibFlags ~= flag;
-            }
-            flagCounts[flag] = flagCounts[flag] - 1;
-        }
-    }
-
-    target.action.setLibs(libs, sysLibFlags);
-
-    if (g_print_deps) {
-        say("Augmented action of %s, complete=%s libs=%s syslibs=%s", target, complete, libs, sysLibFlags);
-    }
-
-    return complete;
 }
 
 
@@ -1273,14 +1346,17 @@ final class DynamicLib : File {
         }
         errorUnless(objs.length > 0, origin, "A dynamic library must have at least one object file");
         action = new Action(origin, pkg, actionName, *command, [this], objs);
+
+        // Also depend on all our contained static libs so that doAugmentAction can use
+        // the dependencies of those static libs, which are only available after
+        // they are up to date
+        foreach (staticLib; staticLibs) {
+            action.addDependency(staticLib);
+        }
     }
 
     override bool augmentAction() {
-        File[] objs;
-        foreach (slib; staticLibs) {
-            objs ~= slib.objs;
-        }
-        return binaryAugmentAction(this, objs, true);
+        return doAugmentAction(this);
     }
 }
 
@@ -1331,7 +1407,7 @@ final class Exe : Binary {
     }
 
     override bool augmentAction() {
-        return binaryAugmentAction(this, objs, false);
+        return doAugmentAction(this);
     }
 }
 
@@ -1800,36 +1876,36 @@ bool doPlanning(Tid[] workerTids) {
                     foreach (target; action.builds) {
                         target.upToDate();
                     }
+                    if (File.outstanding.length > 0 && Action.queue.empty && idle.length == workerTids.length) {
+                        fatal("Calling upToDate() on %s failed to issue any commands and there are none inflight",
+                              action.builds);
+                    }
                 }
             }
 
-            if (!didSend) {
-                // Don't wait for a worker to report back because we didn't send
-                continue;
+            if (File.outstanding.length > 0 && Action.queue.empty && idle.length == workerTids.length) {
+                fatal("%s outstanding and no inflight actions - something is wrong",
+                      File.outstanding.length);
             }
 
-            if (idle.length == workerTids.length) {
-                fatal("Nothing to do with %s outstanding and no inflight actions - " ~
-                      "something is wrong, Outstanding are: %s",
-                      File.outstanding.length, File.outstanding.keys);
+            if (File.outstanding.length > 0 && (Action.queue.empty || idle.empty)) {
+                // Still going, but nothing more can be given to a worker now - wait for a worker to report back
+                receive(
+                    (uint index, string action) {
+                        idle.insert(index);
+                        string[] inputs;
+                        foreach (file; Action.byName[action].inputs) {
+                            inputs ~= file.path;
+                        }
+                        foreach (file; Action.byName[action].builds) {
+                            file.updated(inputs);
+                        }
+                    },
+                    (bool dummy) {
+                        fatal("Aborting due to action failure.");
+                    }
+                );
             }
-
-            // Wait for a worker to report back.
-            receive(
-                (uint index, string action) {
-                    idle.insert(index);
-                    string[] inputs;
-                    foreach (file; Action.byName[action].inputs) {
-                        inputs ~= file.path;
-                    }
-                    foreach (file; Action.byName[action].builds) {
-                        file.updated(inputs);
-                    }
-                },
-                (bool dummy) {
-                    fatal("Aborting due to action failure.");
-                }
-            );
         }
     }
     catch (BailException ex) {}
