@@ -395,7 +395,15 @@ final class Action {
         completed = true;
 
         string[string] extras;
-        extras["DEPS"] = depsPath;
+
+        {
+            string path = depsPath;
+            extras["DEPS"] = path;
+            if (path.exists) {
+                path.remove;
+            }
+        }
+
         {
             string value;
             foreach (file; inputs) {
@@ -403,6 +411,7 @@ final class Action {
             }
             extras["INPUT"] = strip(value);
         }
+
         {
             string value;
             foreach (file; builds) {
@@ -410,6 +419,7 @@ final class Action {
             }
             extras["OUTPUT"] = strip(value);
         }
+
         {
             string value;
             foreach (lib; libs) {
