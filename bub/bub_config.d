@@ -273,6 +273,10 @@ void establishBuildDir(string          buildDir,
         string tmp = buildNormalizedPath(getcwd, buildDir, "tmp");
         string runText =
             format("#!/bin/bash\n" ~
+                   "if [ $# -eq 0 ]; then\n" ~
+                   "    echo 'Expected parameters specifying the command to run'\n" ~
+                   "    exit 1\n" ~
+                   "fi\n" ~
                    "source environment\n" ~
                    "export TMP_PATH=\"%s/tmp-$(basename \"${1}\")\"\n" ~
                    "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec \"$@\"\n",

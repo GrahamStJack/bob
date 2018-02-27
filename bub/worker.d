@@ -61,7 +61,7 @@ void doWork(bool printActions, uint index) {
 
     void perform(string action, string command, string targets) {
         say("%s", action);
-        if (printActions) { say("\n%s\n", command); }
+        if (printActions) { say("\n%s", command); }
 
         success = false;
         string[string] env;
@@ -132,9 +132,13 @@ void doWork(bool printActions, uint index) {
         auto output = std.stdio.File(resultsPath, "w");
         try {
             auto splitCommand = split(command); // TODO handle quoted args
+            if (isTest) {
+                // TODO add the timeout parameter to the message so that each test can specify
+                //      its own timeout
+                splitCommand = ["timeout", "1m"] ~ splitCommand;
+            }
 
             Pid child = spawnProcess(splitCommand, std.stdio.stdin, output, output, env);
-
             killer.launched(myName, child);
             success = wait(child) == 0;
             killer.completed(myName, child);
@@ -224,11 +228,10 @@ void doWork(bool printActions, uint index) {
         }
     }
     catch (BailException ex) {}
-    catch (Exception ex) { /*fatal("Got unexpected exception %s :\n%s", ex.msg, ex.info);*/ }
+    catch (Exception ex) {}
 
     try {
         ownerTid.send(true);
     }
     catch (Exception ex) {}
-
 }

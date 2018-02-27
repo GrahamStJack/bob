@@ -1764,7 +1764,7 @@ void flushCompletedCommands() {
         content ~=
             "\n" ~
             "{ \"directory\": \"" ~ dir ~ "\",\n" ~
-            "  \"command\":   \"" ~ command ~ "\"\n" ~
+            "  \"command\":   \"" ~ command.replace("\"", "\\\"") ~ "\",\n" ~
             "  \"file\":      \"" ~ path ~ "\" }";
         first = false;
     }
@@ -1864,7 +1864,6 @@ bool doPlanning(Tid[] workerTids) {
 
         while (File.outstanding.length) {
             // Send actions till there are no idle workers or no more queued actions.
-            bool didSend;
             while (!idle.empty && !Action.queue.empty) {
                 const Action next = Action.queue.front;
                 Action.queue.popFront();
@@ -1883,7 +1882,6 @@ bool doPlanning(Tid[] workerTids) {
                     int index = idle.front;
                     idle.popFront();
                     workerTids[index].send(next.name, next.command, targets);
-                    didSend = true;
                 }
                 else {
                     // The action doesn't need to be performed - mark all its targets as up to date,
@@ -1892,20 +1890,16 @@ bool doPlanning(Tid[] workerTids) {
                     foreach (target; action.builds) {
                         target.upToDate();
                     }
-                    if (File.outstanding.length > 0 && Action.queue.empty && idle.length == workerTids.length) {
-                        fatal("Calling upToDate() on %s failed to issue any commands and there are none inflight",
-                              action.builds);
-                    }
                 }
             }
 
             if (File.outstanding.length > 0 && Action.queue.empty && idle.length == workerTids.length) {
-                fatal("%s outstanding and no inflight actions - something is wrong",
+                fatal("%s targets outstanding and no inflight actions - something is wrong",
                       File.outstanding.length);
             }
 
-            if (File.outstanding.length > 0 && (Action.queue.empty || idle.empty)) {
-                // Still going, but nothing more can be given to a worker now - wait for a worker to report back
+            if (idle.length != workerTids.length) {
+                // We have workers on the job - wait for one of them to report back
                 receive(
                     (uint index, string action) {
                         idle.insert(index);
@@ -1925,7 +1919,7 @@ bool doPlanning(Tid[] workerTids) {
         }
     }
     catch (BailException ex) {}
-    catch (Exception ex) { say("Unexpected exception %s", ex); }
+    catch (Exception ex) { say("Unexpected exception %s", ex.msg); }
 
     // Flush the completed commands to compile_commands.json
     flushCompletedCommands();
