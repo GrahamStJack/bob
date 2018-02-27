@@ -1139,7 +1139,7 @@ bool doAugmentAction(File target) {
                 // Use slib if target doesn't contain it (only dynamic libs contain static libs).
                 if (dynamicLib is null || dlib is null || *dlib !is target) {
                     errorUnless(dynamicLib is null || slib.objs.length == 0, target.origin,
-                                "Dynamic library %s cannot link with static lib %s - add it to dynamic libraries",
+                                "Dynamic library %s cannot link with static lib %s - add it to a dynamic library",
                                 dynamicLib, slib);
                     neededStaticLibs ~= slib;
                 }

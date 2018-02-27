@@ -333,8 +333,10 @@ void establishBuildDir(string          buildDir,
 //
 // Return whatever the given string evaluates to, replacing any $(<command>) instances
 // with whatever <command> outputs, and expanding any ${<define>} tokens in the given string.
+// Multiple levels of expansion are done, so a variable can contain another variable, etc.
 //
 string evaluate(string text, const ref Vars vars) {
+    string working = text;
     string result;
     bool   inCommand;
     bool   inVar;
@@ -342,48 +344,68 @@ string evaluate(string text, const ref Vars vars) {
     string command;
     string var;
 
-    foreach (i, ch; text) {
-        char next = i+1 < text.length ? text[i+1] : '\0';
-        if (ch == '(' && prev == '$') {
-            enforce(!inCommand, "Nested commands not supported");
-            enforce(!inVar, "Commands inside variables not supported");
-            inCommand = true;
-            command   = "";
-        }
-        else if (inCommand && ch == ')') {
-            auto rc = executeShell(command);
-            enforce(rc.status == 0, format("Failed to run '%s', output '%s'", command, rc.output));
-            result ~= rc.output.strip;
-            inCommand = false;
-        }
-        else if (ch == '{' && prev == '$') {
-            enforce(!inVar, "Nested vars are not supported");
-            inVar  = true;
-            var    = "";
-        }
-        else if (inVar && ch == '}') {
-            enforce(var in vars, format("Variable '%s' not defined", var));
-            if (inCommand) {
-                command ~= vars[var].join(" ").strip;
+    while (true) {
+        bool continuing;
+        foreach (i, ch; working) {
+            char next = i+1 < working.length ? working[i+1] : '\0';
+            if (ch == '(' && prev == '$') {
+                enforce(!inCommand, "Nested commands not supported");
+                enforce(!inVar, "Commands inside variables not supported");
+                inCommand  = true;
+                command    = "";
+                continuing = true;
             }
-            else {
+            else if (inCommand && ch == ')') {
+                auto rc = executeShell(command);
+                enforce(rc.status == 0, format("Failed to run '%s', output '%s'", command, rc.output));
+                result ~= rc.output.strip;
+                inCommand = false;
+            }
+            else if (ch == '{' && prev == '$') {
+                enforce(!inVar, "Nested vars are not supported");
+                inVar      = true;
+                var        = "";
+                continuing = true;
+            }
+            else if (inVar && ch == '}') {
+                enforce(var in vars, format("Variable '%s' not defined", var));
+                if (inCommand) {
+                    result ~= "$(" ~ command;
+                    inCommand = false;
+                }
                 result ~= vars[var].join(" ").strip;
+                result ~= working[i+1..$];
+                inVar = false;
+                break;
             }
-            inVar = false;
+            else if (inVar) {
+                var ~= ch;
+            }
+            else if (inCommand && (ch != '$' || next != '{')) {
+                command ~= ch;
+            }
+            else if (!inCommand && !inVar && (ch != '$' || (next != '(' && next != '{'))) {
+                result ~= ch;
+            }
+            prev = ch;
         }
-        else if (inVar) {
-            var ~= ch;
+        result = result.strip;
+        enforce(!inCommand && !inVar, format("Unterminated command or variable in '%s'", working));
+
+        //writefln("Converted '%s' into '%s'", working, result);
+        if (continuing) {
+            // Use result as working, reset everything else, and go arouund again
+            working   = result;
+            result    = "";
+            inCommand = false;
+            inVar     = false;
+            command   = "";
+            prev      = '\0';
         }
-        else if (inCommand && (ch != '$' || next != '{')) {
-            command ~= ch;
+        else {
+            break;
         }
-        else if (!inCommand && !inVar && (ch != '$' || (next != '(' && next != '{'))) {
-            result ~= ch;
-        }
-        prev = ch;
     }
-    result = result.strip;
-    enforce(!inCommand && !inVar, format("Unterminated command or variable in '", text, "'"));
     return result;
 }
 
