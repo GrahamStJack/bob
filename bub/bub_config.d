@@ -497,11 +497,14 @@ void parseConfig(string        configFile,
 
     enum Section { none, defines, modes, syslibCompileFlags, syslibLinkFlags }
 
+    Vars[string] fragments;
+    Vars         modes;
+    Vars*        fragment;
+
     Section section = Section.none;
-    bool    inMode;
-    bool    foundMode;
     string  commandType;
     size_t  syslibNum;
+
 
     if (!exists(configFile)) {
         writefln("Could not file config file %s", configFile);
@@ -539,20 +542,51 @@ void parseConfig(string        configFile,
                     break;
                 }
                 case Section.modes: {
-                    if (!line.length) {
-                        // Blank line - mode ended.
-                        inMode = false;
+                    // Accumulate fragments and modes.
+                    // Fragments start with a name on one line and comprise the following indented lines.
+                    // Modes are on one line: name = fragments
+
+                    if (line.length == 0) {
+                        // Blank line - ignore except to finish an in-progress fragment
+                        fragment = null;
                     }
-                    else if (!isWhite(line[0])) {
-                        // We are in a mode, which might be the one we want.
-                        inMode = strip(line) == mode;
-                    }
-                    else if (inMode) {
-                        // Add to an existing variable
-                        string[] tokens = split(line, " +=");
-                        if (tokens.length == 2) {
-                            vars.append(strip(tokens[0]), split(tokens[1]), AppendType.mustExist);
+                    else if (!line[0].isWhite) {
+                        // Non-indented line - terminate any in-progress fragment and either
+                        // start another or define a mode
+                        fragment = null;
+                        string[] tokens = line.split("=");
+                        if (tokens.length == 1) {
+                            // Start a fragment
+                            string name = tokens[0].strip;
+                            fragments[name] = null;
+                            fragment = name in fragments;
                         }
+                        else if (tokens.length == 2) {
+                            // Add a new mode
+                            string   name   = tokens[0].strip;
+                            string[] values = tokens[1].split;
+                            modes[name] = values;
+                        }
+                        else {
+                            enforce(false, format("Invalid mode line '%s'", line));
+                        }
+                    }
+                    else {
+                        // Indented line - add to the current fragment
+                        enforce(fragment !is null, format("Can't indent a mode line unless inside a fragment: '%s'", line));
+                        bool adding;
+                        string[] tokens = line.split(" =");
+                        if (tokens.length == 1) {
+                            tokens = line.split(" +=");
+                            adding = true;
+                        }
+                        enforce(tokens.length == 2, format("Invalid mode line '%s'", line));
+                        string   name   = tokens[0].strip;
+                        string[] values = tokens[1].split;
+                        if (adding) {
+                            values = ["+"] ~ values;
+                        }
+                        (*fragment)[name] = values;
                     }
                     break;
                 }
@@ -589,6 +623,27 @@ void parseConfig(string        configFile,
                     break;
                 }
             }
+        }
+    }
+
+    // Apply the mode
+    string[] selectedFragments;
+    if (mode in modes) {
+        selectedFragments ~= modes[mode];
+    }
+    else if (modes.length == 0) {
+        selectedFragments ~= mode;
+    }
+    enforce(selectedFragments.length > 0, "Invalid mode " ~ mode);
+    foreach (name; selectedFragments) {
+        foreach (var, values; fragments[name]) {
+            bool adding;
+            if (values.length > 0 && values[0] == "+") {
+                adding = true;
+                values = values[1..$];
+            }
+            writefln("Applying mode fragment %s %s %s %s", name, adding ? "adding-to" : "setting", var, values);
+            append(vars, var, values, adding ? AppendType.mustExist : AppendType.notExist);
         }
     }
 
