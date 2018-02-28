@@ -79,7 +79,8 @@ int main(string[] args) {
                    "details|v",      &printDetails,
                    "actions|a",      &printActions,
                    "jobs|j",         &numJobs,
-                   "help|h",         &help);
+                   "help|h",         &help,
+                   std.getopt.config.passThrough);
         }
         catch (std.conv.ConvException ex) {
             returnValue = 2;
@@ -90,13 +91,6 @@ int main(string[] args) {
             say(ex.msg);
         }
 
-        if (args.length != 1) {
-            say("Option processing failed. There are %s unprocessed argument(s): ", args.length - 1);
-            foreach (uint i, arg; args[1 .. args.length]) {
-                say("  %s. \"%s\"", i + 1, arg);
-            }
-            returnValue = 2;
-        }
         if (numJobs < 1) {
             returnValue = 2;
             say("Must allow at least one job!");
@@ -160,7 +154,7 @@ int main(string[] args) {
         g_print_deps    = printDeps;
         g_print_details = printDetails;
 
-        // Run the pre-build script if one is specified
+        // Run the pre-build script if one is specified, passing it any unprocessed command-line arguments
         auto preBuild = getOption("PRE_BUILD");
         if (preBuild.length > 0) {
             string command = preBuild;
@@ -171,6 +165,14 @@ int main(string[] args) {
             if (rc.status != 0) {
                 fatal("%s failed with: %s", command, rc.output);
             }
+        }
+        else if (args.length != 1) {
+            // There is no pre-build script specified, so there should not have been any unprocessed arguments
+            say("Option processing failed. There are %s unprocessed argument(s): ", args.length - 1);
+            foreach (uint i, arg; args[1 .. args.length]) {
+                say("  %s. \"%s\"", i + 1, arg);
+            }
+            returnValue = 2;
         }
 
         // Spawn the bailer and workers
