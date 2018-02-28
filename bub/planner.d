@@ -213,7 +213,8 @@ final class Action {
             addDependency(dep);
         }
 
-        // All the files built by this action depend on the Bubfile
+        // All the files built by this action depend on the package's Bubfile and on Buboptions
+        depends ~= File.options;
         addDependency(pkg.bubfile);
 
         // Recognise in-project tools in the command.
@@ -597,6 +598,7 @@ final class Pkg : Node {
 //
 class File : Node {
     static DependencyCache cache;       // Cache of information gleaned from ${DEPS} in commands
+    static File            options;     // The Buboptions file, which all actions depend on
     static File[]          ordered;     // Files in increasing "number" order
     static File[string]    byPath;      // Files by their path
     static bool[File]      allBuilt;    // all built files
@@ -624,7 +626,7 @@ class File : Node {
         return buildPath(start, Pkg.getPkgOf(parent).trail, extra);
     }
 
-    this(ref Origin origin, Node parent_, string name_, Privacy privacy_, string path_, bool built_) {
+    this(Origin origin, Node parent_, string name_, Privacy privacy_, string path_, bool built_) {
         string nodeName = name_.replace("/", "__"); // Allow files to be in subdirectories
         super(origin, parent_, nodeName, privacy_);
 
@@ -1735,9 +1737,11 @@ void accumulateCompletedCommand(Action action) {
         depends = targetPkg in pkgDepends;
     }
     foreach (depend; action.depends) {
-        auto dependPkg = Pkg.getPkgOf(depend);
-        if (dependPkg !is targetPkg) {
-            (*depends)[dependPkg] = true;
+        if (depend.path != "Buboptions") { // Buboptions breaks the dependency rules, and is uninteresting anyway
+            auto dependPkg = Pkg.getPkgOf(depend);
+            if (dependPkg !is targetPkg) {
+                (*depends)[dependPkg] = true;
+            }
         }
     }
 }
@@ -1831,6 +1835,7 @@ bool doPlanning(Tid[] workerTids) {
     try {
         // Read the project's Bubfiles
         auto project = new Pkg(Origin(), null, "", Privacy.PRIVATE);
+        File.options = new File(Origin(), project, "Buboptions", Privacy.PUBLIC, "Buboptions", false);
         processBubfile("", project);
 
         // Clean out unwanted built and deps files and load the dependency cache -

@@ -143,7 +143,6 @@ int main(string[] args) {
                     value = value.replace("${BUILD_PATH}", ".");
 
                     if (name != "BUILD_PATH") {
-                        say("Set environment variable %s to %s", name, value);
                         environment[name] = value;
                     }
                 }
