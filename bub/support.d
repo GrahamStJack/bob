@@ -194,11 +194,9 @@ class Killer {
     // remember that a process has been launched, killing it if we have bailed
     void launched(string worker, Pid child) {
         synchronized(this) {
+            children[child] = true;
             if (bailed) {
                 mykill(child.processID, SIGTERM);
-            }
-            else {
-                children[child] = true;
             }
         }
     }

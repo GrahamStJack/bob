@@ -734,7 +734,7 @@ int main(string[] args) {
         foreach (relToBuildPath; *postConfigure) {
             auto fromPath = buildPath(buildDir, relToBuildPath);
             auto toPath   = buildPath(buildDir, relToBuildPath.baseName);
-            std.file.write(toPath, std.file.read(fromPath));
+            update(toPath, fromPath.readText, false);
         }
     }
 
