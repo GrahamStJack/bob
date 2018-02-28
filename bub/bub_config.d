@@ -65,8 +65,6 @@ version(Posix) {
 
     string ENV_DELIM  = ":";
     string ENV_PREFIX = "";
-
-    string CLEAN_TEXT = "rm -rf dist priv obj deps tmp\n";
 }
 version(Windows) {
     // Set the mode of a file
@@ -86,8 +84,6 @@ version(Windows) {
 
     string ENV_DELIM = ";";
     string ENV_PREFIX = "set ";
-
-    string CLEAN_TEXT = "rmdir /s /q dist priv obj tmp\n";
 }
 
 
@@ -177,7 +173,14 @@ string toEnv(string envName, const ref Vars vars, string[] varNames, string[] ex
 // Return an array of strings parsed from an environment variable.
 //
 string[] fromEnv(string varname) {
-    return split(environment.get(varname), ENV_DELIM);
+    string[] tokens = split(environment.get(varname), ENV_DELIM);
+    string[] result;
+    foreach (token; tokens) {
+        if (token.length > 0) {
+            result~= token;
+        }
+    }
+    return result;
 }
 
 
@@ -202,7 +205,10 @@ void update(string path, string content, bool executable) {
 //
 // Set up build directory.
 //
-void establishBuildDir(string          buildDir,
+void establishBuildDir(string          exeName,
+                       string          mode,
+                       string          configFile,
+                       string          buildDir,
                        string          srcDir,
                        const           Vars vars,
                        const Locations repos,
@@ -217,7 +223,6 @@ void establishBuildDir(string          buildDir,
         writefln("%s is not a directory", buildDir);
         exit(1);
     }
-
 
     // Create Buboptions file from vars
     string bubText;
@@ -236,20 +241,23 @@ void establishBuildDir(string          buildDir,
 
     // Create clean script.
     version(Posix) {
+        string CLEAN_TEXT = "rm -rf dist priv obj deps tmp\n";
         update(buildPath(buildDir, "clean"), CLEAN_TEXT, true);
     }
     version(Windows) {
+        string CLEAN_TEXT = "rmdir /s /q dist priv obj tmp\n";
         update(buildPath(buildDir, "clean.bat"), CLEAN_TEXT, true);
     }
 
 
     // Create environment file.
-    string bin   = buildNormalizedPath(getcwd, buildDir, "dist", "bin");
-    string data  = buildNormalizedPath(getcwd, buildDir, "dist", "data");
+    string bin   = buildPath("${BUILD_PATH}", "dist", "bin");
+    string data  = buildPath("${BUILD_PATH}", "dist", "data");
     string env   = buildPath(buildDir, "environment");
     string envText;
     version(Posix) {
         envText ~= "#!/bin/bash\n";
+        envText ~= "BUILD_PATH=\"$(dirname \"${BASH_SOURCE[0]}\")\"\n";
         envText ~= "export " ~ toEnv("LD_LIBRARY_PATH",
                                      vars,
                                      ["LIB_DIRS"],
@@ -268,33 +276,42 @@ void establishBuildDir(string          buildDir,
     update(env, envText, false);
 
 
-    // Create run script
+    // Create assorted run-like scripts
     version(Posix) {
-        string tmp = buildNormalizedPath(getcwd, buildDir, "tmp");
-        string runText =
-            format("#!/bin/bash\n" ~
-                   "if [ $# -eq 0 ]; then\n" ~
-                   "    echo 'Expected parameters specifying the command to run'\n" ~
-                   "    exit 1\n" ~
-                   "fi\n" ~
-                   "source environment\n" ~
-                   "export TMP_PATH=\"%s/tmp-$(basename \"${1}\")\"\n" ~
-                   "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec \"$@\"\n",
-                   tmp);
-        update(buildPath(buildDir, "run"), runText, true);
+        string scriptsDir = buildPath(buildDir, "scripts");
+        if (!scriptsDir.exists) {
+            scriptsDir.mkdir;
+        }
+        string runText(string funky) {
+            return format("#!/bin/bash\n" ~
+                          "if [ $# -eq 0 ]; then\n" ~
+                          "    echo 'Expected parameters specifying the command to run'\n" ~
+                          "    exit 1\n" ~
+                          "fi\n" ~
+                          "source $(dirname \"${BASH_SOURCE[0]}\")/environment\n" ~
+                          "export TMP_PATH=\"${BUILD_PATH}/tmp/tmp-$(basename \"${1}\")\"\n" ~
+                          "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec %s \"$@\"\n",
+                          funky);
+        }
+        update(buildPath(buildDir,   "run"),  runText(""),                                  true);
+        update(buildPath(scriptsDir, "gdb"),  runText("gdb --args"),                        true);
+        update(buildPath(scriptsDir, "perf"), runText("perf record -g -f -o perf.log -- "), true);
     }
     version(Windows) {
         string runText = envText ~ "\n%1%";
         update(buildPath(buildDir, "run.bat"), runText, true);
     }
 
+    // Create rerun-configure to make it easy to re-configure after a config-affecting change
+    string RERUN = format("pushd %s && %s --mode=%s --config=%s %s", srcDir, exeName, mode, configFile, buildDir);
+    update(buildPath(scriptsDir, "rerun-configure"), RERUN, true);
 
     //
     // Create src directory with symbolic links to all top-level packages in all
     // specified repositories.
     //
 
-    // Make clean repos and src dirs.
+    // Make clean repos and src dirs
     string localReposPath = buildPath(buildDir, "repos");
     if (exists(localReposPath)) {
         rmdirRecurse(localReposPath);
@@ -693,8 +710,8 @@ int main(string[] args) {
         exit(1);
     }
 
-    string buildDir = args[1];
     string srcDir   = std.file.getcwd();
+    string buildDir = buildNormalizedPath(srcDir, args[1]);
 
 
     //
@@ -707,10 +724,10 @@ int main(string[] args) {
     string[]  pkgNames;
 
     vars["SRCDIR"]   = [srcDir];
-    vars["LIB_DIRS"] = [buildPath("dist", "lib")];
+    vars["LIB_DIRS"] = [buildPath("${BUILD_PATH}", "dist", "lib")];
 
     parseConfig(configFile, mode, vars, repos, packages, pkgNames);
-    establishBuildDir(buildDir, srcDir, vars, repos, packages, pkgNames);
+    establishBuildDir(args[0], mode, configFile, buildDir, srcDir, vars, repos, packages, pkgNames);
 
     auto postConfigure = "POST_CONFIGURE" in vars;
     if (postConfigure) {

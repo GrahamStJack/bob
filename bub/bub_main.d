@@ -136,10 +136,16 @@ int main(string[] args) {
 
                     auto tokens2 = name.split;
                     if (tokens2.length > 1) {
+                        // strip off "export"
                         name = tokens2[1];
                     }
 
-                    environment[name] = value;
+                    value = value.replace("${BUILD_PATH}", ".");
+
+                    if (name != "BUILD_PATH") {
+                        say("Set environment variable %s to %s", name, value);
+                        environment[name] = value;
+                    }
                 }
             }
         }
