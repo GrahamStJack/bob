@@ -68,6 +68,7 @@ int main(string[] args) {
         bool printDeps       = false;
         bool printDetails    = false;
         bool printActions    = false;
+        bool clean           = false;
         bool help            = false;
         uint numJobs         = 1;
 
@@ -79,6 +80,7 @@ int main(string[] args) {
                    "details|v",      &printDetails,
                    "actions|a",      &printActions,
                    "jobs|j",         &numJobs,
+                   "clean|c",        &clean,
                    "help|h",         &help,
                    std.getopt.config.passThrough);
         }
@@ -106,14 +108,31 @@ int main(string[] args) {
                 "  --actions        print actions\n" ~
                 "  --details        print heaps of details\n" ~
                 "  --jobs=VALUE     maximum number of simultaneous actions\n" ~
+                "  --clean          remove all built files before starting\n" ~
                 "  --help           show this message\n" ~
                 "target is everything contained in the project Bubfile and anything referred to.");
             return returnValue;
         }
 
+        if (!"Buboptions".exists) {
+            say("This doesn't look like a build directory");
+            return 1;
+        }
+
         if (printDetails) {
             printActions = true;
             printDeps = true;
+        }
+
+        if (clean) {
+            void rm(string[] paths) {
+                foreach (path; paths) {
+                    if (path.exists) {
+                        rmdirRecurse(path);
+                    }
+                }
+            }
+            rm(["tmp", "obj", "priv", "deps", "dist"]);
         }
 
         // Set environment variables found in the environment file so that workers get them

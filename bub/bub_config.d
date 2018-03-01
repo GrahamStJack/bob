@@ -239,17 +239,6 @@ void establishBuildDir(string          exeName,
     update(buildPath(buildDir, "Buboptions"), bubText, false);
 
 
-    // Create clean script.
-    version(Posix) {
-        string CLEAN_TEXT = "rm -rf dist priv obj deps tmp\n";
-        update(buildPath(buildDir, "clean"), CLEAN_TEXT, true);
-    }
-    version(Windows) {
-        string CLEAN_TEXT = "rmdir /s /q dist priv obj tmp\n";
-        update(buildPath(buildDir, "clean.bat"), CLEAN_TEXT, true);
-    }
-
-
     // Create environment file.
     string bin   = buildPath("${BUILD_PATH}", "dist", "bin");
     string data  = buildPath("${BUILD_PATH}", "dist", "data");
