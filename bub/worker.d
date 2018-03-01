@@ -162,8 +162,13 @@ void doWork(bool printActions, uint index) {
             if (!bailed) {
                 // Print error message
                 if (isTest) {
-                    // For tests, print the test output as-is.
-                    say("\n%s", readText(resultsPath));
+                    // For tests, move the test output to a file alongside the success file,
+                    // then write to the console with leading text to
+                    // prompt an editor to open the failure file
+                    string failurePath = targs[0][0..$-"-passed".length] ~ "-failed";
+                    resultsPath.rename(failurePath);
+                    say("%s:1: error", failurePath);
+                    say("\n%s", readText(failurePath));
                 }
                 else {
                     // For non-tests, attempt to provide demangled versions of symbol names.
