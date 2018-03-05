@@ -108,7 +108,7 @@ int main(string[] args) {
                 "  --actions        print actions\n" ~
                 "  --details        print heaps of details\n" ~
                 "  --jobs=VALUE     maximum number of simultaneous actions\n" ~
-                "  --clean          remove all built files before starting\n" ~
+                "  --clean          just remove all built files\n" ~
                 "  --help           show this message\n" ~
                 "target is everything contained in the project Bubfile and anything referred to.");
             return returnValue;
@@ -133,6 +133,7 @@ int main(string[] args) {
                 }
             }
             rm(["tmp", "obj", "priv", "deps", "dist"]);
+            return 0;
         }
 
         // Set environment variables found in the environment file so that workers get them
