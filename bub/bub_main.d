@@ -192,7 +192,7 @@ int main(string[] args) {
             foreach (uint i, arg; args[1 .. args.length]) {
                 say("  %s. \"%s\"", i + 1, arg);
             }
-            returnValue = 2;
+            return 2;
         }
 
         // Spawn the bailer and workers

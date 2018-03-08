@@ -290,10 +290,6 @@ void establishBuildDir(string          exeName,
         update(buildPath(buildDir, "run.bat"), runText, true);
     }
 
-    // Create rerun-configure to make it easy to re-configure after a config-affecting change
-    string RERUN = format("pushd %s && %s --mode=%s --config=%s %s", srcDir, exeName, mode, configFile, buildDir);
-    update(buildPath(scriptsDir, "rerun-configure"), RERUN, true);
-
     //
     // Create src directory with symbolic links to all top-level packages in all
     // specified repositories.
