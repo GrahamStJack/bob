@@ -60,7 +60,6 @@ void doWork(bool printActions, uint index) {
     string tmpPath     = buildPath("tmp", myName ~ "-tmp");
 
     void perform(string action, string command, string targets) {
-        say("%s", action);
         if (printActions) { say("\n%s", command); }
 
         success = false;

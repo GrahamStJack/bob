@@ -334,7 +334,6 @@ void ensureParent(string path) {
     if (dir !in doesExist) {
         if (!exists(dir)) {
             ensureParent(dir);
-            say("%-15s %s", "Mkdir", dir);
             mkdir(dir);
         }
         else if (!isDir(dir)) {

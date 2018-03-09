@@ -445,11 +445,22 @@ final class Action {
         return name;
     }
     override int opCmp(Object o) const {
-        // Reverse order so that a prority queue presents low numbers first
+        // Reverse order so that a prority queue puts low numbers to the front,
+        // and we also boost the priority of generate actions so that they don't
+        // slow things down
         if (this is o) return 0;
         Action a = cast(Action)o;
         if (a is null) return  -1;
-        return a.number - number;
+        int nextGenerator = pendingGenerators.length > 0 ? pendingGenerators[0].number : -1;
+        if (nextGenerator == number) {
+            return 1;
+        }
+        else if (nextGenerator == a.number) {
+            return -1;
+        }
+        else {
+            return a.number - number;
+        }
     }
 }
 
@@ -969,7 +980,7 @@ abstract class Binary : File {
                 }
                 Action genAction = new Action(origin,
                                               pkg,
-                                              format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
+                                              format("%-15s %s", ext ~ "->" ~ suffixes, files[0].path),
                                               generate.command,
                                               files,
                                               [sourceFile]);
@@ -1278,7 +1289,7 @@ final class StaticLib : Binary {
                 File copy = new File(origin, this, source.name ~ "-copy", Privacy.PRIVATE, destPath, true);
 
                 copy.action = new Action(origin, pkg,
-                                         format("%-15s %s", "Export", source.path),
+                                         format("%-15s %s", "Export", copy.path),
                                          "COPY ${INPUT} ${OUTPUT}",
                                          [copy], [source]);
             }
@@ -1501,7 +1512,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
                 errorUnless(files.length > 0, origin, "Must have at least one destination suffix");
                 Action genAction = new Action(origin,
                                             pkg,
-                                            format("%-15s %s", ext ~ "->" ~ suffixes, sourceFile.path),
+                                            format("%-15s %s", ext ~ "->" ~ suffixes, files[0].path),
                                             generate.command,
                                             files,
                                             [sourceFile]);
@@ -1886,6 +1897,7 @@ bool doPlanning(Tid[] workerTids) {
 
                     int index = idle.front;
                     idle.popFront();
+                    say("%s", next.name);
                     workerTids[index].send(next.name, next.command, targets);
                 }
                 else {
