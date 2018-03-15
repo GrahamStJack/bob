@@ -1836,6 +1836,61 @@ void flushPkgDepends() {
     }
 }
 
+void flushIncludePathList() {
+    string content;
+
+    foreach (dir; options["PROJ_INC"].split) {
+        content ~= dir ~ "\n";
+    }
+    string[] prefixes = ["-isystem", "-I"];
+    bool[string] done;
+    foreach (name, definition; sysLibDefinitions) {
+        foreach (flag; definition.compileFlags) {
+            foreach (prefix; prefixes) {
+                if (flag.startsWith(prefix)) {
+                    auto dir = flag[prefix.length..$];
+                    if (dir !in done) {
+                        done[dir] = true;
+                        content ~= flag ~ "\n";
+                    }
+                }
+            }
+        }
+    }
+
+    string file = "include-paths";
+    string tmp  = file ~ ".tmp";
+    if (!file.exists || content != file.readText) {
+        tmp.write(content);
+        tmp.rename(file);
+    }
+}
+
+void flushFileList() {
+    string[] paths;
+    foreach (path, file; File.byPath) {
+        auto ext = path.extension;
+        if (ext != ".o" &&
+            !path.endsWith("-passed") &&
+            cast(Binary) file is null &&
+            cast(DynamicLib) file is null)
+        {
+            paths ~= path;
+        }
+    }
+    string content;
+    foreach (path; paths.sort) {
+        content ~= path ~ "\n";
+    }
+
+    string file = "files-of-interest";
+    string tmp  = file ~ ".tmp";
+    if (!file.exists || content != file.readText) {
+        tmp.write(content);
+        tmp.rename(file);
+    }
+}
+
 
 //
 // Planner function
@@ -1848,6 +1903,14 @@ bool doPlanning(Tid[] workerTids) {
         auto project = new Pkg(Origin(), null, "", Privacy.PRIVATE);
         File.options = new File(Origin(), project, "Buboptions", Privacy.PUBLIC, "Buboptions", false);
         processBubfile("", project);
+
+        // Update files that contain lists of known non-binary files and include directories
+        // that may be of assistance for users with IDEs that don't understand compile_commands.json.
+        // We do this here because such IDEs aren't concerned with correctness, and use the same
+        // include paths for all files - so we don't have to wait until we complete the compile commands,
+        // and can therefore provide a complete list even if the build fails.
+        flushIncludePathList;
+        flushFileList;
 
         // Clean out unwanted built and deps files and load the dependency cache -
         // now that we know all the built files
