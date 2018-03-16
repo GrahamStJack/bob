@@ -245,7 +245,7 @@ void establishBuildDir(string          exeName,
     string env   = buildPath(buildDir, "environment");
     string envText;
     version(Posix) {
-        envText ~= "BUILD_PATH=\"$(realpath -s ${PWD}/$(dirname \"${BASH_SOURCE[0]}\"))\"\n";
+        envText ~= "BUILD_PATH=\"$(realpath -s $(dirname \"${BASH_SOURCE[0]}\"))\"\n";
         envText ~= "export " ~ toEnv("LD_LIBRARY_PATH",
                                      vars,
                                      ["LIB_DIRS"],
