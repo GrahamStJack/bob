@@ -56,19 +56,19 @@ void doWork(bool printActions, uint index) {
 
     string myName = format("worker%d", index);
 
-    string resultsPath = buildPath("tmp", myName);
-    string tmpPath     = buildPath("tmp", myName ~ "-tmp");
+    string         resultsPath = buildPath("tmp", myName);
+    string         tmpPath     = buildPath("tmp", myName ~ "-tmp");
+    string[string] env;
+
+    env["TMP_PATH"] = tmpPath;
 
     void perform(string action, string command, string targets) {
-        if (printActions) { say("\n%s", command); }
-
         success = false;
-        string[string] env;
+        if (printActions) { say("\n%s", command); }
 
         if (tmpPath.exists) {
             rmdirRecurse(tmpPath);
         }
-        env["TMP_PATH"] = tmpPath;
 
         bool isTest = command.startsWith("TEST ");
 
@@ -128,16 +128,16 @@ void doWork(bool printActions, uint index) {
 
         // launch child process to do the action, then wait for it to complete
 
+        if (isTest) {
+            // TODO add the timeout parameter to the message so that each test can specify
+            //      its own timeout
+            command = "timeout 1m " ~ command;
+        }
+
         auto output = std.stdio.File(resultsPath, "w");
         try {
-            auto splitCommand = split(command); // TODO handle quoted args
-            if (isTest) {
-                // TODO add the timeout parameter to the message so that each test can specify
-                //      its own timeout
-                splitCommand = ["timeout", "1m"] ~ splitCommand;
-            }
 
-            Pid child = spawnProcess(splitCommand, std.stdio.stdin, output, output, env);
+            Pid child = spawnShell(command, std.stdio.stdin, output, output, env);
             killer.launched(myName, child);
             success = wait(child) == 0;
             killer.completed(myName, child);

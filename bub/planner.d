@@ -1779,7 +1779,7 @@ void flushCompletedCommands() {
         content ~=
             "\n" ~
             "{ \"directory\": \"" ~ dir ~ "\",\n" ~
-            "  \"command\":   \"" ~ command.replace("\"", "\\\"") ~ "\",\n" ~
+            "  \"command\":   \"" ~ command.replace(`\`, `\\`).replace(`"`, `\"`) ~ "\",\n" ~
             "  \"file\":      \"" ~ path ~ "\" }";
         first = false;
     }
