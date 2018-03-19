@@ -114,7 +114,7 @@ final class SysLib {
 //   establishes new dependencies on the libraries, which may cause the build of
 //   the dynamic library or executable to be delayed.
 //
-class DependencyCache {
+final class DependencyCache {
     enum string dir    = "deps";
     enum string prefix = dir ~ dirSeparator;
 
@@ -288,7 +288,7 @@ final class Action {
 
     // add an extra depend to this action, returning true if it is a new one
     bool addDependency(File depend) {
-        if (issued) fatal("Cannot add a dependancy to issued action %s", this);
+        if (issued) fatal("Cannot add a dependency to issued action %s", this);
         bool added;
         if (builds[0] !in depend.dependedBy) {
             foreach (built; builds) {
@@ -1727,8 +1727,8 @@ void cleandirs() {
 // Compile commands that are written to file for use by other tools
 //
 
-string[string] completedCommands; // command text by the source file's path
-bool[Pkg][Pkg] pkgDepends;        // packages that a package depends on
+string[File]   completedCommands;
+bool[Pkg][Pkg] pkgDepends; // packages that a package depends on
 
 void accumulateCompletedCommand(Action action) {
     assert(action.completed);
@@ -1737,7 +1737,7 @@ void accumulateCompletedCommand(Action action) {
         action.depends.length > 0)
     {
         // This command will be of interest to tools that want to grok the source - accumulate it
-        completedCommands[action.depends[0].path] = action.command;
+        completedCommands[action.depends[0]] = action.command;
     }
 
     // Accumulate package dependencies implied by this completed command
@@ -1764,7 +1764,7 @@ void flushCompletedCommands() {
     //   "command":   "<command>",
     //   "file":      "<source-path>" },
     //   ...
-    //  ]
+    // ]
     string file = "compile_commands.json";
     string tmp  = file ~ ".tmp";
     string content;
@@ -1772,7 +1772,8 @@ void flushCompletedCommands() {
 
     content ~= "[";
     bool first = true;
-    foreach (path, command; completedCommands) {
+    foreach_reverse (f; completedCommands.keys.sort) {
+        string command = completedCommands[f];
         if (!first) {
             content ~= ",";
         }
@@ -1780,7 +1781,7 @@ void flushCompletedCommands() {
             "\n" ~
             "{ \"directory\": \"" ~ dir ~ "\",\n" ~
             "  \"command\":   \"" ~ command.replace(`\`, `\\`).replace(`"`, `\"`) ~ "\",\n" ~
-            "  \"file\":      \"" ~ path ~ "\" }";
+            "  \"file\":      \"" ~ f.path ~ "\" }";
         first = false;
     }
     content ~= "\n]";
@@ -2001,13 +2002,12 @@ bool doPlanning(Tid[] workerTids) {
     catch (BailException ex) {}
     catch (Exception ex) { say("Unexpected exception %s", ex.msg); }
 
-    // Flush the completed commands to compile_commands.json
-    flushCompletedCommands();
+    if (File.outstanding.length == 0) {
+        // Success
 
-    // Flush the complete package dependency information to package-dependencies
-    flushPkgDepends();
-
-    if (!File.outstanding.length) {
+        // Flush the completed commands and dependency information now that we know everything
+        flushCompletedCommands();
+        flushPkgDepends();
 
         // Print some statistics and report success.
         say("\n" ~
