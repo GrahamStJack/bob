@@ -225,9 +225,9 @@ void establishBuildDir(string          exeName,
     string envPath = buildPath(buildDir, "environment");
     string envText;
     version(Posix) {
-        envText ~= "BUILD_PATH=\"$(realpath -s $(dirname \"${BASH_SOURCE[0]}\"))\"\n";
+        envText ~= "export BUILD_PATH=\"$(realpath -s $(dirname \"${BASH_SOURCE[0]}\"))\"\n";
         foreach (name; env.keys) {
-            envText ~= env.toEnv(name);
+            envText ~= "export " ~ env.toEnv(name);
         }
     }
     version(Windows) {
