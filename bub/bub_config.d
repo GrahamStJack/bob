@@ -103,7 +103,7 @@ alias string[string]   Locations; // path by name
 //
 // Enum to control how to append to variables
 //
-enum AppendType { notExist, mustExist }
+enum AppendType { notExist, mustExist, mayExist }
 
 
 //
@@ -117,6 +117,8 @@ private void append(ref Vars vars, string name, string[] extra, AppendType appen
         break;
     case AppendType.mustExist:
         assert(name in vars, format("Cannot add to non-existant variable '%s'", name));
+        break;
+    case AppendType.mayExist:
         break;
     }
 
@@ -141,45 +143,24 @@ private void append(ref Vars vars, string name, string[] extra, AppendType appen
 
 
 //
-// Return a string to set an environment variable from one or more bub variables.
+// Return a string to set an environment variable from an env element
 //
-string toEnv(string envName, const ref Vars vars, string[] varNames, string[] extras) {
+string toEnv(const ref Vars env, string name) {
     string result;
     bool[string] got;
-    string[] candidates = extras;
-    foreach (name; varNames) {
-        if (name in vars) {
-            candidates ~= vars[name];
-        }
-    }
-    foreach (token; candidates) {
+    foreach_reverse (token; env[name]) {
         if (token !in got) {
             got[token] = true;
             result ~= token ~ ENV_DELIM;
         }
     }
-    if (result) {
-        result = ENV_PREFIX ~ envName ~ "=\"" ~ result[0..$-ENV_DELIM.length];
+    if (result.length > 0) {
+        result = ENV_PREFIX ~ name ~ `="` ~ result[0..$-ENV_DELIM.length];
     }
-    if (result[$-ENV_DELIM.length..$] == ENV_DELIM) {
+    while (result.endsWith(ENV_DELIM)) {
         result = result[0..$-ENV_DELIM.length];
     }
     result ~= "\"\n";
-    return result;
-}
-
-
-//
-// Return an array of strings parsed from an environment variable.
-//
-string[] fromEnv(string varname) {
-    string[] tokens = split(environment.get(varname), ENV_DELIM);
-    string[] result;
-    foreach (token; tokens) {
-        if (token.length > 0) {
-            result~= token;
-        }
-    }
     return result;
 }
 
@@ -210,10 +191,11 @@ void establishBuildDir(string          exeName,
                        string          configFile,
                        string          buildDir,
                        string          srcDir,
-                       const           Vars vars,
+                       const Vars      vars,
                        const Locations repos,
                        const Locations packages,
-                       const string[]  pkgNames) {
+                       const string[]  pkgNames,
+                       const Vars      env) {
 
     // Create build directory
     if (!exists(buildDir)) {
@@ -240,28 +222,19 @@ void establishBuildDir(string          exeName,
 
 
     // Create environment file.
-    string bin   = buildPath("${BUILD_PATH}", "dist", "bin");
-    string data  = buildPath("${BUILD_PATH}", "dist", "data");
-    string env   = buildPath(buildDir, "environment");
+    string envPath = buildPath(buildDir, "environment");
     string envText;
     version(Posix) {
         envText ~= "BUILD_PATH=\"$(realpath -s $(dirname \"${BASH_SOURCE[0]}\"))\"\n";
-        envText ~= "export " ~ toEnv("LD_LIBRARY_PATH",
-                                     vars,
-                                     ["LIB_DIRS"],
-                                     fromEnv("LD_LIBRARY_PATH"));
-        envText ~= "export " ~ toEnv("PATH",
-                                     vars,
-                                     ["SYS_PATH"],
-                                     [bin] ~ fromEnv("PATH"));
-        envText ~= "export DIST_DATA_PATH=\"" ~ data ~ "\"\n";
-        envText ~= "export SYSTEM_DATA_PATH=\"" ~ data ~ "\"\n";
+        foreach (name; env.keys) {
+            envText ~= env.toEnv(name);
+        }
     }
     version(Windows) {
         envText ~= toEnv("PATH", vars, ["LIB_DIRS", "SYS_PATH"], [lib, bin] ~ fromEnv("PATH"));
         envText ~= "set DIST_DATA_PATH=\"" ~ data ~ "\"\n";
     }
-    update(env, envText, false);
+    update(envPath, envText, false);
 
 
     // Create assorted run-like scripts
@@ -335,6 +308,8 @@ void establishBuildDir(string          exeName,
 // Return whatever the given string evaluates to, replacing any $(<command>) instances
 // with whatever <command> outputs, and expanding any ${<define>} tokens in the given string.
 // Multiple levels of expansion are done, so a variable can contain another variable, etc.
+//
+// ${BUILD_PATH} evaluates to the build directory's path.
 //
 string evaluate(string text, const ref Vars vars) {
     string working = text;
@@ -494,9 +469,10 @@ void parseConfig(string        configFile,
                  ref Vars      vars,
                  ref Locations repos,
                  ref Locations packages,
-                 ref string[]  pkgNames) {
+                 ref string[]  pkgNames,
+                 ref Vars      env) {
 
-    enum Section { none, defines, modes, syslibCompileFlags, syslibLinkFlags }
+    enum Section { none, defines, modes, syslibCompileFlags, syslibLinkFlags, environment }
 
     Vars[string] fragments;
     Vars         modes;
@@ -574,7 +550,8 @@ void parseConfig(string        configFile,
                     }
                     else {
                         // Indented line - add to the current fragment
-                        enforce(fragment !is null, format("Can't indent a mode line unless inside a fragment: '%s'", line));
+                        enforce(fragment !is null,
+                                format("Can't indent a mode line unless inside a fragment: '%s'", line));
                         bool adding;
                         string[] tokens = line.split(" =");
                         if (tokens.length == 1) {
@@ -613,13 +590,16 @@ void parseConfig(string        configFile,
                     if (tokens.length == 2) {
                         string[] options = split(evaluate(strip(tokens[1]), vars));
                         vars.append("syslib-link-flags " ~ strip(tokens[0]), options, AppendType.notExist);
+                    }
+                    break;
+                }
 
-                        // Add the -L options to the LIB_DIRS variable so they end up in the environment file
-                        foreach (option; options) {
-                            if (option.startsWith("-L")) {
-                                append(vars, "LIB_DIRS", [option[2..$]], AppendType.mustExist);
-                            }
-                        }
+                case Section.environment: {
+                    string[] tokens = line.split("+=");
+                    if (tokens.length == 2) {
+                        string   name   = tokens[0].strip;
+                        string[] values = tokens[1].strip.split;
+                        env.append(name, values, AppendType.mayExist);
                     }
                     break;
                 }
@@ -706,16 +686,22 @@ int main(string[] args) {
     Locations repos;
     Locations packages;
     string[]  pkgNames;
+    Vars      env;
 
-    vars["SRCDIR"]   = [srcDir];
-    vars["LIB_DIRS"] = [buildPath("${BUILD_PATH}", "dist", "lib")];
+    vars["BUILD_PATH"] = [buildDir];
 
-    parseConfig(configFile, mode, vars, repos, packages, pkgNames);
-    establishBuildDir(args[0], mode, configFile, buildDir, srcDir, vars, repos, packages, pkgNames);
+    env.append("LD_LIBRARY_PATH",  [buildPath("${BUILD_PATH}", "dist", "lib")], AppendType.mayExist);
+    env.append("PATH",             ["/bin", "/usr/bin", buildPath("${BUILD_PATH}", "dist", "bin")],
+               AppendType.mayExist);
+    env.append("SYSTEM_DATA_PATH", [buildPath("${BUILD_PATH}", "dist", "data")], AppendType.mayExist);
+
+    parseConfig(configFile, mode, vars, repos, packages, pkgNames, env);
+    establishBuildDir(args[0], mode, configFile, buildDir, srcDir, vars, repos, packages, pkgNames, env);
 
     auto postConfigure = "POST_CONFIGURE" in vars;
     if (postConfigure) {
         foreach (relToBuildPath; *postConfigure) {
+            // Copy the specified post-configure files into the build directory
             auto fromPath = buildPath(buildDir, relToBuildPath);
             auto toPath   = buildPath(buildDir, relToBuildPath.baseName);
             update(toPath, fromPath.readText, false);
