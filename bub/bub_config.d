@@ -54,7 +54,7 @@ version(Posix) {
 
     // Set the mode of a file
     private void setMode(string path, bool executable) {
-        chmod(toStringz(path), executable ? octal!744 : octal!644);
+        chmod(toStringz(path), executable ? octal!755 : octal!644);
     }
 
     // Make a symbolic link
