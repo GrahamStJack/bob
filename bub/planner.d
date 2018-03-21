@@ -196,6 +196,7 @@ final class Action {
     Action     blockedBy;   // The generate action that blocks this one
     bool       completed;   // True if the action has been completed
     bool       dirty;       // True if the action needs to be executed by a worker
+    string     culprit;     // The path of the first dependency that dirtied the action
     bool       issued;      // True if the action has been queued for processing
 
     this(Origin origin_, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
@@ -433,10 +434,11 @@ final class Action {
     }
 
     // issue this action
-    void issue(bool dirty_) {
+    void issue(bool dirty_, string culprit_) {
         assert(completed);
         assert(!issued);
         dirty  = dirty_;
+        culprit = culprit_;
         issued = true;
         queue.insert(this);
     }
@@ -771,6 +773,7 @@ class File : Node {
         if (action !is null && !action.issued) {
             bool wait;
             bool dirty = action.newest > modTime;
+            string reason = "non-project dependency";
             if (dirty && g_print_deps) say("%s system dependencies are younger", this);
 
             if (action.isBlockedByGeneratedFile) {
@@ -791,6 +794,7 @@ class File : Node {
                         if (depend.modTime > modTime && depend !in action.weakDepends) {
                             if (g_print_deps) say("%s dependency %s is younger", this, depend);
                             dirty = true;
+                            reason  = depend.path;
                             // Don't break here, because other dependencies may force us to wait
                         }
                     }
@@ -804,17 +808,21 @@ class File : Node {
                     wait = augmentAction();
                     if (!wait) {
                         augmented = true;
+
+                        // re-check if we are are now dirty, then issue
+                        issueIfReady;
+                        return;
                     }
                 }
             }
             if (!wait) {
                 // Complete and issue the action, regardless of whether this file is dirty or not.
-                // When the action is taken off the priority queue, it given to a worker if dirty,
+                // When the action is taken off the priority queue, it is given to a worker if dirty,
                 // and otherwise upTodate() is called. We do this because calling upToDate() here
                 // would cause unboundedly deep recursion.
                 action.complete();
                 accumulateCompletedCommand(action);
-                action.issue(dirty);
+                action.issue(dirty, reason);
             }
         }
     }
@@ -1032,7 +1040,7 @@ abstract class Binary : File {
 //
 // * The usual dependency rules.
 //
-// * If preventStaticLibs, StaticLibs aren't allowed as new dependencies.
+// * If target is a dynamic library, StaticLibs aren't allowed as new dependencies.
 //
 // Returns true if this call adds dependencies that are not yet satisfied.
 //
@@ -1066,7 +1074,8 @@ bool doAugmentAction(File target) {
                                         target, obj, *depend);
 
                             if (*binaryDepend !is target && *binaryDepend !in done) {
-                                // binaryDepend is a StaticLib that isn't the target - we depend on it
+                                // binaryDepend is a StaticLib that isn't the target - weakly
+                                // depend on it so that we will be able to use its reqStaticLibs
                                 auto slib = cast(StaticLib*) binaryDepend;
                                 errorUnless(slib !is null, binaryDepend.origin,
                                             "Expected %s to be a StaticLib", *binaryDepend);
@@ -1118,7 +1127,7 @@ bool doAugmentAction(File target) {
     DynamicLib[] neededDynamicLibs;
     SysLib[]     neededSysLibs;
 
-    // Accumulate the consequences of a static lib
+    // Accumulate the consequences of a static lib, returning true if any now-known depedencies aren't ready
     bool accumulate(StaticLib slib) {
         if (slib !in done) {
             done[slib] = true;
@@ -1961,7 +1970,12 @@ bool doPlanning(Tid[] workerTids) {
 
                     int index = idle.front;
                     idle.popFront();
-                    say("%s", next.name);
+                    if (g_print_culprit) {
+                        say("%s (%s is newer)", next.name, next.culprit);
+                    }
+                    else {
+                        say("%s", next.name);
+                    }
                     workerTids[index].send(next.name, next.command, targets);
                 }
                 else {

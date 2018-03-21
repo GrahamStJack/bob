@@ -396,4 +396,5 @@ bool startsWith(string str, string[] prefixes) {
 //
 bool g_print_rules;
 bool g_print_deps;
+bool g_print_culprit;
 bool g_print_details;

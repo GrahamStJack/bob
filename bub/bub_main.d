@@ -66,6 +66,7 @@ int main(string[] args) {
     try {
         bool printStatements = false;
         bool printDeps       = false;
+        bool printCulprit    = false;
         bool printDetails    = false;
         bool printActions    = false;
         bool clean           = false;
@@ -77,6 +78,7 @@ int main(string[] args) {
                    std.getopt.config.caseSensitive,
                    "statements|s",   &printStatements,
                    "deps|d",         &printDeps,
+                   "culprit",        &printCulprit,
                    "details|v",      &printDetails,
                    "actions|a",      &printActions,
                    "jobs|j",         &numJobs,
@@ -105,6 +107,7 @@ int main(string[] args) {
             say("Usage:  bub [options]\n" ~
                 "  --statements     print statements\n" ~
                 "  --deps           print dependencies\n" ~
+                "  --dirty          add dirtying dependency to normal output\n" ~
                 "  --actions        print actions\n" ~
                 "  --details        print heaps of details\n" ~
                 "  --jobs=VALUE     maximum number of simultaneous actions\n" ~
@@ -122,6 +125,7 @@ int main(string[] args) {
         if (printDetails) {
             printActions = true;
             printDeps = true;
+            printCulprit = true;
         }
 
         if (clean) {
@@ -172,6 +176,7 @@ int main(string[] args) {
         readOptions();
         g_print_rules   = printStatements;
         g_print_deps    = printDeps;
+        g_print_culprit = printCulprit;
         g_print_details = printDetails;
 
         // Run the pre-build script if one is specified, passing it any unprocessed command-line arguments
