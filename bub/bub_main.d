@@ -180,22 +180,20 @@ int main(string[] args) {
         g_print_details = printDetails;
 
         // Run the pre-build script if one is specified, passing it any unprocessed command-line arguments
+        auto unprocessed = args[1..$];
         auto preBuild = getOption("PRE_BUILD");
         if (preBuild.length > 0) {
-            string command = preBuild;
-            foreach (arg; args) {
-                command ~= " " ~ arg;
-            }
+            string command = preBuild ~ " " ~ unprocessed.escapeShellCommand;
             auto rc = executeShell(command);
             if (rc.status != 0) {
-                fatal("%s failed with: %s", command, rc.output);
+                fatal("%s failed with:\n%s", command, rc.output);
             }
         }
-        else if (args.length != 1) {
+        else if (unprocessed.length > 0) {
             // There is no pre-build script specified, so there should not have been any unprocessed arguments
-            say("Option processing failed. There are %s unprocessed argument(s): ", args.length - 1);
-            foreach (uint i, arg; args[1 .. args.length]) {
-                say("  %s. \"%s\"", i + 1, arg);
+            say("Option processing failed. There are %s unprocessed argument(s): ", unprocessed.length);
+            foreach (arg; unprocessed) {
+                say("  '%s'", arg);
             }
             return 2;
         }
