@@ -392,14 +392,11 @@ final class Action {
     //   DEPS   -> Path to a temporary dependencies file.
     //   OUTPUT -> Paths of the built files.
     //   LIBS   -> Names of all required libraries, without lib prefix or extension.
-    void complete() {
-        assert(!completed);
-        completed = true;
-
+    string resolveCommandProvidingExtras(string deps = "") {
         string[string] extras;
 
-        {
-            string path = depsPath;
+        if (deps != "") {
+            string path = deps;
             extras["DEPS"] = path;
             if (path.exists) {
                 path.remove;
@@ -430,7 +427,14 @@ final class Action {
             extras["LIBS"] = strip(value);
         }
 
-        command = resolveCommand(command, extras, sysLibFlags);
+        return resolveCommand(command, extras, sysLibFlags);
+    }
+
+    // Complete this action
+    void complete() {
+        assert(!completed);
+        completed = true;
+        command = resolveCommandProvidingExtras(depsPath);
     }
 
     // issue this action
@@ -1772,24 +1776,11 @@ void cleanDirs() {
 }
 
 
-//
-// Compile commands that are written to file for use by other tools
-//
-
-string[File]   completedCommands;
 bool[Pkg][Pkg] pkgDepends; // packages that a package depends on
 
+// Accumulate package dependencies implied by this completed command
 void accumulateCompletedCommand(Action action) {
     assert(action.completed);
-    if (action.builds.length == 1 &&
-        action.builds[0].path.extension == ".o" &&
-        action.depends.length > 0)
-    {
-        // This command will be of interest to tools that want to grok the source - accumulate it
-        completedCommands[action.depends[0]] = action.command;
-    }
-
-    // Accumulate package dependencies implied by this completed command
     Pkg  targetPkg = Pkg.getPkgOf(action.builds[0]);
     auto depends   = targetPkg in pkgDepends;
     if (depends is null) {
@@ -1806,14 +1797,33 @@ void accumulateCompletedCommand(Action action) {
     }
 }
 
-void flushCompletedCommands() {
-    // The format is:
-    // [
-    // { "directory": "<dir-path>",
-    //   "command":   "<command>",
-    //   "file":      "<source-path>" },
-    //   ...
-    // ]
+
+//
+// Flush compiler commands to file for use by other tools.
+//
+// These commands are independent of dependency information, and so should all
+// be completable before *any* commands are issued.
+//
+// The format is:
+// [
+// { "directory": "<dir-path>",
+//   "command":   "<command>",
+//   "file":      "<source-path>" },
+//   ...
+// ]
+//
+void flushCompilerCommands() {
+    string[File] commands;
+
+    foreach (action; Action.byName) {
+        if (action.builds.length == 1 &&
+            action.builds[0].path.extension == ".o" &&
+            action.depends.length > 0)
+        {
+            commands[action.depends[0]] = action.resolveCommandProvidingExtras;
+        }
+    }
+
     string file = "compile_commands.json";
     string tmp  = file ~ ".tmp";
     string content;
@@ -1821,8 +1831,8 @@ void flushCompletedCommands() {
 
     content ~= "[";
     bool first = true;
-    foreach_reverse (f; completedCommands.keys.sort) {
-        string command = completedCommands[f];
+    foreach_reverse (f; commands.keys.sort) {
+        string command = commands[f];
         if (!first) {
             content ~= ",";
         }
@@ -1961,6 +1971,7 @@ bool doPlanning(Tid[] workerTids) {
         // and can therefore provide a complete list even if the build fails.
         flushIncludePathList;
         flushFileList;
+        flushCompilerCommands;
 
         // Clean out unwanted built and deps files and load the dependency cache -
         // now that we know all the built files
@@ -2059,8 +2070,7 @@ bool doPlanning(Tid[] workerTids) {
     if (File.outstanding.length == 0) {
         // Success
 
-        // Flush the completed commands and dependency information now that we know everything
-        flushCompletedCommands();
+        // Flush the package dependency information now that we know everything
         flushPkgDepends();
 
         // Print some statistics and report success.
