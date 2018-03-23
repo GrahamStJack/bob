@@ -144,7 +144,7 @@ int main(string[] args) {
         if (exists("environment")) {
             string envContent = readText("environment");
             foreach (line; splitLines(envContent)) {
-                string[] tokens = split(line, "=");
+                string[] tokens = line.split("=");
                 if (tokens.length == 2 && tokens[0][0] != '#') {
                     if (tokens[1][0] == '"') {
                         tokens[1] = tokens[1][1 .. $-1];

@@ -44,17 +44,21 @@ static import std.array;
 string[string] options;
 
 // Build options
-string[string] compileCommands; // Compile command by input extension
-string[string] slibCommands;    // Static lib command by source extension
-string[string] dlibCommands;    // Dynamic lib command by source extension
-string[string] exeCommands;     // Exe command by source extension
+// Rules to generate files other than reserved extensions
 
-// Commands to generate files other than reserved extensions
-struct GenerateCommand {
-    string[] suffixes;
-    string   command;
+struct Rule {
+    string[] suffixes; // the suffixes of files produced by the command
+    string   command;  // the command
 }
-GenerateCommand[string] generateCommands; // Gernerate command by input extension
+
+// Rules whose first suffix is the primary target, and the others are optional
+Rule[string] compileRules; // Compile rule by input extension
+Rule[string] slibRules;    // Static lib rule by source extension
+Rule[string] dlibRules;    // Dynamic lib rule by source extension
+Rule[string] exeRules;     // Exe rule by source extension
+
+// Rules with all-madatory target suffixes
+Rule[string] generateRules; // Gernerate rule by input extension
 
 // Extra flags to apply if a SysLib is depended on
 struct SysLibDefinition {
@@ -72,7 +76,7 @@ static this() {
 //
 // Read an options file, populating option lines
 // Format is:   key = value
-// value can contain '='
+// value can't contain " = ".
 //
 void readOptions() {
     string path = "Buboptions";
@@ -92,40 +96,40 @@ void readOptions() {
 
                 string[] extensions = split(key);
                 if (extensions.length < 2) {
-                    fatal("Commands require at least two extensions: %s", line);
+                    fatal("Rules require at least two extensions: %s", line);
                 }
                 string   input   = extensions[0];
                 string[] outputs = extensions[1 .. $];
 
                 errorUnless(input !in reservedExts, origin,
-                            "Cannot use %s as source ext in commands", input);
+                            "Cannot use %s as source ext in rules", input);
 
-                if (outputs.length == 1 && outputs[0] == ".obj") {
-                    errorUnless(input !in compileCommands && input !in generateCommands,
-                                origin, "Multiple compile/generate commands using %s", input);
-                    compileCommands[input] = value;
+                if (outputs[0] == ".obj") {
+                    errorUnless(input !in compileRules && input !in generateRules,
+                                origin, "Multiple compile/generate rules using %s", input);
+                    compileRules[input] = Rule(outputs, value);
                 }
-                else if (outputs.length == 1 && outputs[0] == ".slib") {
-                    errorUnless(input !in slibCommands, origin, "Multiple .slib commands using %s", input);
-                    slibCommands[input] = value;
+                else if (outputs[0] == ".slib") {
+                    errorUnless(input !in slibRules, origin, "Multiple .slib rules using %s", input);
+                    slibRules[input] = Rule(outputs, value);
                 }
-                else if (outputs.length == 1 && outputs[0] == ".dlib") {
-                    errorUnless(input !in dlibCommands, origin, "Multiple .dlib commands using %s", input);
-                    dlibCommands[input] = value;
+                else if (outputs[0] == ".dlib") {
+                    errorUnless(input !in dlibRules, origin, "Multiple .dlib rules using %s", input);
+                    dlibRules[input] = Rule(outputs, value);
                 }
-                else if (outputs.length == 1 && outputs[0] == ".exe") {
-                    errorUnless(input !in exeCommands, origin, "Multiple .exe commands using %s", input);
-                    exeCommands[input] = value;
+                else if (outputs[0] == ".exe") {
+                    errorUnless(input !in exeRules, origin, "Multiple .exe rules using %s", input);
+                    exeRules[input] = Rule(outputs, value);
                 }
                 else {
                     // A generate command
-                    errorUnless(input !in compileCommands && input !in generateCommands,
-                                origin, "Multiple compile/generate commands using %s", input);
+                    errorUnless(input !in compileRules && input !in generateRules,
+                                origin, "Multiple compile/generate rules using %s", input);
                     foreach (ext; outputs) {
                         errorUnless(ext !in reservedExts, origin,
                                     "Cannot use %s in a generate command: %s", ext, line);
                     }
-                    generateCommands[input] = GenerateCommand(outputs, value);
+                    generateRules[input] = Rule(outputs, value);
                 }
             }
             else if (key.startsWith("syslib-")) {

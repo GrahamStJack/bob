@@ -107,8 +107,7 @@ enum AppendType { notExist, mustExist, mayExist }
 
 
 //
-// Append some tokens to the named element in vars,
-// optionally not appending if already present, and preserving order.
+// Append some tokens to the named element in vars, preserving order
 //
 private void append(ref Vars vars, string name, string[] extra, AppendType appendType) {
     final switch (appendType) {
@@ -126,18 +125,7 @@ private void append(ref Vars vars, string name, string[] extra, AppendType appen
         vars[name] = null;
     }
     foreach (string item; extra) {
-        bool got = false;
-        if (appendType != AppendType.notExist) {
-            foreach (string have; vars[name]) {
-                if (item == have) {
-                    got = true;
-                    break;
-                }
-            }
-        }
-        if (!got) {
-            vars[name] ~= item;
-        }
+        vars[name] ~= item;
     }
 }
 
@@ -407,7 +395,7 @@ void parseBundle(string           bundle,
         foreach (string line; bundle.readText.splitLines) {
             if (!line.length || line[0] == '#') continue;
 
-            string[] tokens = split(line, " =");
+            string[] tokens = line.split(" =");
             if (tokens.length == 2) {
                 auto name  = tokens[0].strip;
                 auto items = tokens[1].split;
@@ -489,8 +477,7 @@ void parseConfig(string        configFile,
     }
     writefln("Using config file %s", configFile);
 
-    string content = readText(configFile);
-    foreach (string line; splitLines(content)) {
+    foreach (string line; configFile.readText.splitLines) {
 
         // Skip comment lines.
         if (!line.length || line[0] == '#') continue;
@@ -511,10 +498,10 @@ void parseConfig(string        configFile,
                     break;
                 }
                 case Section.defines: {
-                    string[] tokens = split(line, " =");
+                    string[] tokens = line.split(" =");
                     if (tokens.length == 2) {
                         // Define a new variable.
-                        vars.append(strip(tokens[0]), split(tokens[1]), AppendType.notExist);
+                        vars.append(strip(tokens[0]), tokens[1].split, AppendType.notExist);
                     }
                     break;
                 }
@@ -570,9 +557,9 @@ void parseConfig(string        configFile,
                 }
 
                 case Section.syslibCompileFlags: {
-                    string[] tokens = split(line, " =");
+                    string[] tokens = line.split(" =");
                     if (tokens.length == 2) {
-                        string[] options = split(evaluate(strip(tokens[1]), vars));
+                        string[] options = evaluate(tokens[1].strip, vars).split;
                         // Replace any "-I with "-isystem" so that warnings will be ignored in
                         // system headers
                         foreach (ref option; options) {
@@ -580,16 +567,16 @@ void parseConfig(string        configFile,
                                 option = "-isystem" ~ option[2..$];
                             }
                         }
-                        vars.append("syslib-compile-flags " ~ strip(tokens[0]), options, AppendType.notExist);
+                        vars.append("syslib-compile-flags " ~ tokens[0].strip, options, AppendType.notExist);
                     }
                     break;
                 }
 
                 case Section.syslibLinkFlags: {
-                    string[] tokens = split(line, " =");
+                    string[] tokens = line.split(" =");
                     if (tokens.length == 2) {
-                        string[] options = split(evaluate(strip(tokens[1]), vars));
-                        vars.append("syslib-link-flags " ~ strip(tokens[0]), options, AppendType.notExist);
+                        string[] options = evaluate(tokens[1].strip, vars).split;
+                        vars.append("syslib-link-flags " ~ tokens[0].strip, options, AppendType.notExist);
                     }
                     break;
                 }

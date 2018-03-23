@@ -935,10 +935,10 @@ abstract class Binary : File {
 
             // Look for a command to do something with the source file.
 
-            auto compile  = ext in compileCommands;
-            auto generate = ext in generateCommands;
+            auto compile  = ext in compileRules;
+            auto generate = ext in generateRules;
 
-            if (compile) {
+            if (compile !is null) {
                 // Compile an object file from this source.
 
                 // Remember what source extension this binary uses.
@@ -959,8 +959,7 @@ abstract class Binary : File {
 
                 string actionName = format("%-15s %s", "Compile", obj.path);
 
-                obj.action = new Action(origin, pkg, actionName, *compile,
-                                        [obj], [sourceFile]);
+                obj.action = new Action(origin, pkg, actionName, compile.command, [obj], [sourceFile]);
 
                 // Set additional compiler flags for syslibs this binary explicitly requires.
                 bool[string] flags;
@@ -974,7 +973,7 @@ abstract class Binary : File {
                 }
                 obj.action.setSysLibCompileFlags(flags.keys);
             }
-            else if (generate) {
+            else if (generate !is null) {
                 // Generate more source files from sourceFile.
 
                 File[] files;
@@ -1283,10 +1282,10 @@ final class StaticLib : Binary {
             action = new Action(origin, pkg, actionName, command, [this], objs);
         }
         else {
-            string  actionName = format("%-15s %s", "StaticLib", path);
-            string* command    = sourceExt in slibCommands;
-            errorUnless(command !is null, origin, "No static lib command for '%s'", sourceExt);
-            action = new Action(origin, pkg, actionName, *command, [this], objs);
+            string actionName = format("%-15s %s", "StaticLib", path);
+            auto   rule       = sourceExt in slibRules;
+            errorUnless(rule !is null, origin, "No static lib command for '%s'", sourceExt);
+            action = new Action(origin, pkg, actionName, rule.command, [this], objs);
         }
 
         if (isPublic) {
@@ -1369,8 +1368,8 @@ final class DynamicLib : File {
 
         // action
         string actionName = format("%-15s %s", "DynamicLib", path);
-        string *command = sourceExt in dlibCommands;
-        errorUnless(command !is null, origin, "No link command for %s -> .dlib", sourceExt);
+        auto   rule       = sourceExt in dlibRules;
+        errorUnless(rule !is null, origin, "No link command for %s -> .dlib", sourceExt);
         File[] objs;
         foreach (staticLib; staticLibs) {
             foreach (obj; staticLib.objs) {
@@ -1378,7 +1377,7 @@ final class DynamicLib : File {
             }
         }
         errorUnless(objs.length > 0, origin, "A dynamic library must have at least one object file");
-        action = new Action(origin, pkg, actionName, *command, [this], objs);
+        action = new Action(origin, pkg, actionName, rule.command, [this], objs);
 
         // Also depend on all our contained static libs so that doAugmentAction can use
         // the dependencies of those static libs, which are only available after
@@ -1423,10 +1422,10 @@ final class Exe : Binary {
 
         super(origin, pkg, name_ ~ "-exe", destination(), sourceNames, [], sysLibs);
 
-        string *command = sourceExt in exeCommands;
-        errorUnless(command !is null, origin, "No command to link exe from %s", sourceExt);
+        auto rule = sourceExt in exeRules;
+        errorUnless(rule !is null, origin, "No command to link exe from %s", sourceExt);
 
-        action = new Action(origin, pkg, format("%-15s %s", description(), path), *command, [this], objs);
+        action = new Action(origin, pkg, format("%-15s %s", description(), path), rule.command, [this], objs);
 
         if (kind == "test-exe") {
             File result = new File(origin, pkg, name ~ "-result", Privacy.PRIVATE, path ~ "-passed", true);
@@ -1493,7 +1492,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
             // Determine the destination path for a copy
             string copyPath = buildPath(destDir, relative[destOmit.length..$]);
 
-            GenerateCommand *generate = ext in generateCommands;
+            auto generate = ext in generateRules;
             if (generate is null) {
                 // Target is a simple copy of source file, preserving execute permission
                 string fileName = copyPath.replace("/", "__") ~ "-copy";
@@ -1679,7 +1678,48 @@ void processBubfile(string indent, Pkg pkg) {
 //
 // Remove any files in obj, priv and dist that aren't needed
 //
-void cleandirs() {
+void cleanDirs() {
+    // Set up mapping from optional file suffixes that *might* be produced as a
+    // companion file to the suffixes that they might be produced by
+    bool[string][string] companionProducers;
+    foreach (rule; compileRules) {
+        foreach (companion; rule.suffixes[1..$]) {
+            companionProducers[companion][".o"] = true;
+        }
+    }
+    foreach (rule; slibRules) {
+        foreach (companion; rule.suffixes[1..$]) {
+            companionProducers[companion][".a"] = true;
+        }
+    }
+    foreach (rule; dlibRules) {
+        foreach (companion; rule.suffixes[1..$]) {
+            companionProducers[companion][".so"] = true;
+        }
+    }
+    foreach (rule; exeRules) {
+        foreach (companion; rule.suffixes[1..$]) {
+            companionProducers[companion][""] = true;
+        }
+    }
+
+    // Return true if candidate is a companion file
+    bool isCompanion(string candidate) {
+        string ext = candidate.extension;
+        if (ext.length > 1) {
+            auto producers = ext in companionProducers;
+            if (producers !is null) {
+                foreach (producer; producers.keys) {
+                    string primary = candidate.setExtension(producer);
+                    if (primary in File.byPath) {
+                        return true;
+                    }
+                }
+            }
+        }
+        return false;
+    }
+
     void cleanDir(string name, string prefix = "") {
         if (name.exists && name.isDir) {
             bool[string] unwantedFiles;
@@ -1693,7 +1733,7 @@ void cleandirs() {
                 if (!entry.linkAttributes.attrIsDir) {
                     // A file
                     File* file = builtPath in File.byPath;
-                    if (file is null || *file !in File.allBuilt) {
+                    if (file is null && !isCompanion(builtPath)) {
                         unwantedFiles[path] = true;
                     }
                     else {
@@ -1924,7 +1964,7 @@ bool doPlanning(Tid[] workerTids) {
 
         // Clean out unwanted built and deps files and load the dependency cache -
         // now that we know all the built files
-        cleandirs();
+        cleanDirs();
         File.cache = new DependencyCache();
         foreach (name, action; Action.byName) {
             action.addCachedDependencies;
