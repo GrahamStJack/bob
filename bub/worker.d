@@ -84,8 +84,8 @@ void doWork(bool printActions, uint index) {
             try {
                 std.file.copy(from, to);
                 version(Posix) {
-                    // Preserve executable permission
-                    to.setExecutableIf(from);
+                    // Preserve permissions
+                    to.setPermissions(from);
                 }
                 auto now = Clock.currTime();
                 to.setTimes(now, now);

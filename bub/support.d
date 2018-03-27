@@ -54,18 +54,17 @@ version(Posix) {
         return kill(pid, sig);
     }
 
-    // If source is executable for user, make target executable by user.
-    void setExecutableIf(string target, string source) {
+    // Set the permissions of target to match the source
+    void setPermissions(string target, string source) {
         stat_t sourceStat;
+        stat_t targetStat;
         int rc = stat(toStringz(source), &sourceStat);
         if (rc != 0) fatal("Unable to stat %s", source);
-        if (sourceStat.st_mode & S_IXUSR) {
-            // source is executable - make target executable
-            stat_t targetStat;
-            rc = stat(toStringz(target), &targetStat);
-            if (rc != 0) fatal("Unable to stat %s", target);
-            targetStat.st_mode |= S_IXUSR;
-            rc = chmod(toStringz(target), targetStat.st_mode);
+        rc = stat(toStringz(target), &targetStat);
+        if (rc != 0) fatal("Unable to stat %s", target);
+        if (sourceStat.st_mode != targetStat.st_mode) {
+            // change target's permissions
+            rc = chmod(toStringz(target), sourceStat.st_mode);
             if (rc != 0) fatal("Unable to chmod %s", target);
         }
     }
