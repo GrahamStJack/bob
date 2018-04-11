@@ -1776,11 +1776,13 @@ void cleanDirs() {
 }
 
 
-bool[Pkg][Pkg] pkgDepends; // packages that a package depends on
+bool[Pkg][Pkg]          pkgDepends;    // packages that a package depends on
+bool[StaticLib][Binary] binaryDepends; // static libs that a binary depends on
 
-// Accumulate package dependencies implied by this completed command
+// Accumulate dependencies implied by this completed command
 void accumulateCompletedCommand(Action action) {
     assert(action.completed);
+
     Pkg  targetPkg = Pkg.getPkgOf(action.builds[0]);
     auto depends   = targetPkg in pkgDepends;
     if (depends is null) {
@@ -1792,6 +1794,21 @@ void accumulateCompletedCommand(Action action) {
             auto dependPkg = Pkg.getPkgOf(depend);
             if (dependPkg !is targetPkg) {
                 (*depends)[dependPkg] = true;
+            }
+        }
+    }
+
+    Binary targetBinary = cast(Binary) action.builds[0];
+    if (targetBinary !is null && !targetBinary.path.startsWith("priv")) {
+        auto libs = targetBinary in binaryDepends;
+        if (libs is null) {
+            binaryDepends[targetBinary] = null;
+            libs = targetBinary in binaryDepends;
+        }
+        foreach (depend; action.depends) {
+            StaticLib lib = cast(StaticLib) depend;
+            if (lib !is null && lib !is targetBinary) {
+                (*libs)[lib] = true;
             }
         }
     }
@@ -1896,6 +1913,140 @@ void flushPkgDepends() {
     }
 }
 
+void flushDotFile(string path) {
+    string file = "depends.dot";
+    string tmp  = file ~ ".tmp";
+    string content;
+
+    // Roll up all implied dependencies and mark redundant ones as implied rather than explicit.
+    // This has the effect of decluttering the diagram by removing a lot of arrows,
+    // and also making all the indirect arrows available.
+    bool[Binary] done;
+    void accumulate(Binary binary) {
+        auto deps = binary in binaryDepends;
+        if (deps !is null) {
+            foreach (lib; deps.keys) {
+                if (lib !in done) {
+                    accumulate(lib);
+                    done[lib] = true;
+                }
+                // Add all of lib's own deps as implicit deps of binary,
+                // thereby making any pre-existing explicit dep implicit
+                auto distantDeps = lib in binaryDepends;
+                if (distantDeps !is null) {
+                    foreach (distantDep; distantDeps.keys) {
+                        (*deps)[distantDep] = false;
+                    }
+                }
+            }
+        }
+    }
+    foreach (binary; binaryDepends.keys) {
+        if (binary !in done) {
+            accumulate(binary);
+            done[binary] = true;
+        }
+    }
+
+    // Optionally strip out any binaries that aren't depended on by the executable at path,
+    // carefully leaving behind binaries depended on via a dynaimc library
+    auto specifiedFile = buildPath("dist", "bin", path) in File.byPath;
+    Binary requested;
+    if (specifiedFile !is null) {
+        requested = cast(Binary) *specifiedFile;
+    }
+    bool[DynamicLib] dynamicLibs;
+    if (requested !is null && requested in binaryDepends) {
+        bool[Binary] keepBinaries;
+
+        void accumulate2(Binary keep) {
+            if (keep !in keepBinaries) {
+                keepBinaries[keep] = true;
+                auto deps = keep in binaryDepends;
+                if (deps !is null) {
+                    foreach (dep; deps.keys) {
+                        accumulate2(dep);
+                        auto dynamic = dep in DynamicLib.byContent;
+                        if (dynamic !is null) {
+                            dynamicLibs[*dynamic] = true;
+                            foreach (lib; dynamic.staticLibs) {
+                                accumulate2(lib);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        accumulate2(requested);
+
+        Binary[] removeBinaries;
+        foreach (binary; binaryDepends.keys) {
+            if (binary !in keepBinaries) {
+                removeBinaries ~= binary;
+            }
+        }
+        foreach (binary; removeBinaries) {
+            binaryDepends.remove(binary);
+        }
+        say("Writing dependency graph for %s to %s", path, file);
+        say("Produce an image with a command like: dot -Tpng -O depends.dot", file);
+    }
+    else if (path != "") {
+        say("Couldn't find %s", path);
+        return;
+    }
+
+    // Return a name acceptable to graphviz's dot
+    string dotName(File f) {
+        string name = f.path.baseName.stripExtension.replace("-", "_");
+        if (name.endsWith("_s")) {
+            name = name[0..$-2];
+        }
+        if (name.startsWith("lib")) {
+            name = name[3..$];
+        }
+        if (cast(Exe) f) {
+            name = name ~ "_";
+        }
+        return name;
+    }
+
+    // Convert to text
+    int n;
+    content ~= "digraph G {\n";
+    foreach (dlib; dynamicLibs.keys) {
+        if (dlib.staticLibs.length > 1) {
+            content ~= format("    subgraph cluster%s {\n", ++n);
+            content ~= "        color = blue;\n";
+            content ~= "        label = \"" ~ dotName(dlib) ~ "\";\n";
+            foreach (lib; dlib.staticLibs) {
+                content ~= "        " ~ dotName(lib) ~ ";\n";
+            }
+            content ~= "    }\n";
+        }
+        else {
+            // Represent a dynamic lib containing a single static lib as a
+            // blue coloured static lib in an effort to declutter the diagram
+            content ~= format("    %s [color = blue];\n", dotName(dlib.staticLibs[0]));
+        }
+    }
+    foreach (binary, deps; binaryDepends) {
+        foreach (lib, explicit; deps) {
+            if (explicit) {
+                content ~= "    " ~ dotName(binary) ~ " -> " ~ dotName(lib) ~ ";\n";
+            }
+        }
+    }
+    content ~= "}\n";
+
+    // Write to file
+    if (!file.exists || content != file.readText) {
+        tmp.write(content);
+        tmp.rename(file);
+    }
+}
+
 void flushIncludePathList() {
     string content;
 
@@ -1955,7 +2106,7 @@ void flushFileList() {
 //
 // Planner function
 //
-bool doPlanning(Tid[] workerTids) {
+bool doPlanning(Tid[] workerTids, string dotPath) {
 
     int needed;
     try {
@@ -2070,8 +2221,9 @@ bool doPlanning(Tid[] workerTids) {
     if (File.outstanding.length == 0) {
         // Success
 
-        // Flush the package dependency information now that we know everything
+        // Flush the dependency information now that we know everything
         flushPkgDepends();
+        flushDotFile(dotPath);
 
         // Print some statistics and report success.
         say("\n" ~

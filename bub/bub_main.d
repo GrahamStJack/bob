@@ -69,6 +69,7 @@ int main(string[] args) {
         bool printCulprit    = false;
         bool printDetails    = false;
         bool printActions    = false;
+        string dotPath;
         bool clean           = false;
         bool help            = false;
         uint numJobs         = 1;
@@ -81,6 +82,7 @@ int main(string[] args) {
                    "culprit",        &printCulprit,
                    "details|v",      &printDetails,
                    "actions|a",      &printActions,
+                   "dot",            &dotPath,
                    "jobs|j",         &numJobs,
                    "clean|c",        &clean,
                    "help|h",         &help,
@@ -107,8 +109,9 @@ int main(string[] args) {
             say("Usage:  bub [options]\n" ~
                 "  --statements     print statements\n" ~
                 "  --deps           print dependencies\n" ~
-                "  --dirty          add dirtying dependency to normal output\n" ~
+                "  --culprit        add dirtying dependency to normal output\n" ~
                 "  --actions        print actions\n" ~
+                "  --dot=<path>     write dependency graph for dist-exe at <path> to depends.dot\n" ~
                 "  --details        print heaps of details\n" ~
                 "  --jobs=VALUE     maximum number of simultaneous actions\n" ~
                 "  --clean          just remove all built files\n" ~
@@ -206,7 +209,7 @@ int main(string[] args) {
         }
 
         // Build everything
-        if (!doPlanning(workerTids)) {
+        if (!doPlanning(workerTids, dotPath)) {
             returnValue = 1;
         }
     }
