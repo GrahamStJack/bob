@@ -904,6 +904,11 @@ string validateExtension(Origin origin, string newExt, string usingExt) {
 }
 
 
+// Free function to format an action name.
+string makeActionName(string rule, string description) {
+    return format("%-15s %s", rule, description);
+}
+
 //
 // Binary - a binary file which incorporates object files and 'owns' source files.
 // Concrete implementations are StaticLib and Exe.
@@ -962,7 +967,7 @@ abstract class Binary : File {
                 errorUnless(obj !in byContent, origin, "%s already used", obj.path);
                 byContent[obj] = this;
 
-                string actionName = format("%-15s %s", "Compile", obj.path);
+                string actionName = makeActionName("Compile", obj.path);
 
                 obj.action = new Action(origin, pkg, actionName, compile.command, [obj], [sourceFile]);
 
@@ -992,7 +997,7 @@ abstract class Binary : File {
                 }
                 Action genAction = new Action(origin,
                                               pkg,
-                                              format("%-15s %s", ext ~ "->" ~ suffixes, files[0].path),
+                                              makeActionName(ext ~ "->" ~ suffixes, files[0].path),
                                               generate.command,
                                               files,
                                               [sourceFile]);
@@ -1295,12 +1300,12 @@ final class StaticLib : Binary {
 
         // Set up the library's action.
         if (objs.length == 0) {
-            string actionName = format("%-15s %s", "empty-lib", path);
+            string actionName = makeActionName("empty-lib", path);
             string command    = "DUMMY " ~ path;
             action = new Action(origin, pkg, actionName, command, [this], objs);
         }
         else {
-            string actionName = format("%-15s %s", "StaticLib", path);
+            string actionName = makeActionName("StaticLib", path);
             auto   rule       = sourceExt in slibRules;
             errorUnless(rule !is null, origin, "No static lib command for '%s'", sourceExt);
             action = new Action(origin, pkg, actionName, rule.command, [this], objs);
@@ -1315,7 +1320,7 @@ final class StaticLib : Binary {
                 File copy = new File(origin, this, source.name ~ "-copy", Privacy.PRIVATE, destPath, true);
 
                 copy.action = new Action(origin, pkg,
-                                         format("%-15s %s", "Export", copy.path),
+                                         makeActionName("Export", copy.path),
                                          "COPY ${INPUT} ${OUTPUT}",
                                          [copy], [source]);
             }
@@ -1385,7 +1390,7 @@ final class DynamicLib : File {
         errorUnless(staticLibs.length > 0, origin, "dynamic-lib must have at least one static-lib");
 
         // action
-        string actionName = format("%-15s %s", "DynamicLib", path);
+        string actionName = makeActionName("DynamicLib", path);
         auto   rule       = sourceExt in dlibRules;
         errorUnless(rule !is null, origin, "No link command for %s -> .dlib", sourceExt);
         File[] objs;
@@ -1443,13 +1448,13 @@ final class Exe : Binary {
         auto rule = sourceExt in exeRules;
         errorUnless(rule !is null, origin, "No command to link exe from %s", sourceExt);
 
-        action = new Action(origin, pkg, format("%-15s %s", description(), path), rule.command, [this], objs);
+        action = new Action(origin, pkg, makeActionName(description(), path), rule.command, [this], objs);
 
         if (kind == "test-exe") {
             File result = new File(origin, pkg, name ~ "-result", Privacy.PRIVATE, path ~ "-passed", true);
             result.action = new Action(origin,
                                        pkg,
-                                       format("%-15s %s", "TestResult", result.path),
+                                       makeActionName("TestResult", result.path),
                                        format("TEST %s", this.path),
                                        [result],
                                        [this]);
@@ -1518,7 +1523,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
                 destFile.translateGroup = group;
                 destFile.action = new Action(origin,
                                             pkg,
-                                            format("%-15s %s", "Copy", destFile.path),
+                                            makeActionName("Copy", destFile.path),
                                             "COPY ${INPUT} ${OUTPUT}",
                                             [destFile],
                                             [sourceFile]);
@@ -1538,7 +1543,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
                 errorUnless(files.length > 0, origin, "Must have at least one destination suffix");
                 Action genAction = new Action(origin,
                                             pkg,
-                                            format("%-15s %s", ext ~ "->" ~ suffixes, files[0].path),
+                                            makeActionName(ext ~ "->" ~ suffixes, files[0].path),
                                             generate.command,
                                             files,
                                             [sourceFile]);
@@ -1583,7 +1588,7 @@ void generateFile(ref Origin origin,
     File   target = new File(origin, pkg, targetName, Privacy.PRIVATE, buildPath(destDir, targetName), true);
     Action action = new Action(origin,
                                pkg,
-                               format("%-15s %s", "Generate", target.path),
+                               makeActionName("Generate", target.path),
                                commandLine,
                                [target],
                                inputs);
@@ -2064,6 +2069,14 @@ void flushDotFile(string path) {
     }
 }
 
+void atomicUpdateFile(string content, string path, string tmpExtension = ".tmp") {
+    string tmpPath = path ~ tmpExtension;
+    if (!path.exists || content != path.readText) {
+        tmpPath.write(content);
+        tmpPath.rename(path);
+    }
+}
+
 void flushIncludePathList() {
     string content;
 
@@ -2087,11 +2100,7 @@ void flushIncludePathList() {
     }
 
     string file = "include-paths";
-    string tmp  = file ~ ".tmp";
-    if (!file.exists || content != file.readText) {
-        tmp.write(content);
-        tmp.rename(file);
-    }
+    atomicUpdateFile(content, file);
 }
 
 void flushFileList() {
@@ -2111,12 +2120,7 @@ void flushFileList() {
         content ~= path ~ "\n";
     }
 
-    string file = "files-of-interest";
-    string tmp  = file ~ ".tmp";
-    if (!file.exists || content != file.readText) {
-        tmp.write(content);
-        tmp.rename(file);
-    }
+    atomicUpdateFile(content, "files-of-interest");
 }
 
 
