@@ -2104,22 +2104,14 @@ void flushIncludePathList() {
 }
 
 void flushFileList() {
-    string[] paths;
-    foreach (path, file; File.byPath) {
-        auto ext = path.extension;
-        if (ext != ".o" &&
-            !path.endsWith("-passed") &&
-            cast(Binary) file is null &&
-            cast(DynamicLib) file is null)
-        {
-            paths ~= path;
-        }
-    }
     string content;
-    foreach (path; paths.sort) {
-        content ~= path ~ "\n";
+    File[] allFiles = File.ordered;
+    foreach (path; File.byPath.keys.sort) {
+        File file = File.byPath[path];
+        string rule = file.built ? file.action.name.split()[0] : "Source";
+        // two columns: rule and file
+        content ~= format("%-15s", rule) ~ " " ~ path ~ "\n";
     }
-
     atomicUpdateFile(content, "files-of-interest");
 }
 
