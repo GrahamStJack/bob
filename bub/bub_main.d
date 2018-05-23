@@ -97,13 +97,15 @@ int main(string[] args) {
             say(ex.msg);
         }
 
+        immutable uint maxJobs = 80;
+
         if (numJobs < 1) {
             returnValue = 2;
             say("Must allow at least one job!");
         }
-        if (numJobs > 20) {
-            say("Clamping number of jobs at 20");
-            numJobs = 20;
+        if (numJobs > maxJobs) {
+            say("Clamping number of jobs at %s", maxJobs);
+            numJobs = maxJobs;
         }
         if (returnValue != 0 || help) {
             say("Usage:  bub [options]\n" ~
