@@ -850,6 +850,7 @@ class File : Node {
 
         errorUnless(this.number > other.number ||
                     (!other.built && this.translateGroup > 0 && this.translateGroup == other.translateGroup) ||
+                    (this.parent == other.parent && this.privacy == Privacy.PUBLIC && other.privacy == Privacy.SEMI_PROTECTED) ||
                     other.isDescendantOf(this),
                     origin,
                     "%s cannot depend on later-defined %s",
