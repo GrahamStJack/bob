@@ -231,20 +231,20 @@ void establishBuildDir(string          exeName,
         if (!scriptsDir.exists) {
             scriptsDir.mkdir;
         }
-        string runText(string funky) {
+        string runText(string buildDirRelative, string funky) {
             return format("#!/bin/bash\n" ~
                           "if [ $# -eq 0 ]; then\n" ~
                           "    echo 'Expected parameters specifying the command to run'\n" ~
                           "    exit 1\n" ~
                           "fi\n" ~
-                          "source $(dirname \"${BASH_SOURCE[0]}\")/environment\n" ~
+                          "source $(dirname \"${BASH_SOURCE[0]}\")/%s/environment\n" ~
                           "export TMP_PATH=\"${BUILD_PATH}/tmp/tmp-$(basename \"${1}\")\"\n" ~
                           "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec %s \"$@\"\n",
-                          funky);
+                          buildDirRelative, funky);
         }
-        update(buildPath(buildDir,   "run"),  runText(""),                                  true);
-        update(buildPath(scriptsDir, "gdb"),  runText("gdb --args"),                        true);
-        update(buildPath(scriptsDir, "perf"), runText("perf record -g -f -o perf.log -- "), true);
+        update(buildPath(buildDir,   "run"),  runText(".",  ""),                                  true);
+        update(buildPath(scriptsDir, "gdb"),  runText("..", "gdb --args"),                        true);
+        update(buildPath(scriptsDir, "perf"), runText("..", "perf record -g -f -o perf.log -- "), true);
     }
     version(Windows) {
         string runText = envText ~ "\n%1%";
