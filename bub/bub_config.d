@@ -375,7 +375,7 @@ string evaluate(string text, const ref Vars vars) {
 
 
 //
-// Parse a bundle file, which can only contain REPOS, ROOTS and CONTAIN variables and no sections.
+// Parse a bundle file, which can only contain REPO, ROOT and CONTAIN variables and no sections.
 //
 // bundleFile is the path to the bundle file relative to the config file.
 // Paths in the bundle file are relative to the bundle file's parent directory.

@@ -131,12 +131,11 @@ void doWork(bool printActions, uint index) {
         if (isTest) {
             // TODO add the timeout parameter to the message so that each test can specify
             //      its own timeout
-            command = "timeout 1m " ~ command;
+            command = "timeout --foreground 1m " ~ command;
         }
 
         auto output = std.stdio.File(resultsPath, "w");
         try {
-
             Pid child = spawnShell(command, std.stdio.stdin, output, output, env);
             killer.launched(myName, child);
             success = wait(child) == 0;
