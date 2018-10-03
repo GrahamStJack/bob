@@ -1878,10 +1878,11 @@ void flushPkgDepends() {
 
     // Prepare the result, cleaning out pkgDepends as we go
     while (pkgDepends.length > 0) {
-        foreach (pkg, depends; pkgDepends) {
+        bool success;
+        foreach (pkg, ref depends; pkgDepends) {
             if (depends.length == 0) {
-                // Low-level package - put into result
-                foreach (pkg2, depends2; pkgDepends) {
+                // Low-level package - put into result and remove it from all depends
+                foreach (pkg2, ref depends2; pkgDepends) {
                     if (pkg in depends2) {
                         depends2.remove(pkg);
                         result[pkg2] ~= pkg;
@@ -1890,9 +1891,11 @@ void flushPkgDepends() {
                 // And remove it from pkgDepends
                 pkgDepends.remove(pkg);
                 order ~= pkg;
+                success = true;
                 break;
             }
         }
+        if (!success) { fatal("Corrupted pkgDepends: %s", pkgDepends); }
     }
 
     // Convert to text
