@@ -1080,21 +1080,22 @@ bool doAugmentAction(File target) {
                             if (*binaryDepend !is target && *binaryDepend !in done) {
                                 // binaryDepend is a StaticLib that isn't the target - weakly
                                 // depend on it so that we will be able to use its reqStaticLibs
-                                auto slib = cast(StaticLib*) binaryDepend;
+                                auto slib = cast(StaticLib) *binaryDepend;
                                 errorUnless(slib !is null, binaryDepend.origin,
-                                            "Expected %s to be a StaticLib", *binaryDepend);
-                                done[*slib] = true;
-                                if (target.action.addLaterDependency(*slib)) {
+                                            "%s (%s:%s) depends on %s which must be a static-lib, but is an executable.",
+                                            target, target.origin.path, target.origin.line, *binaryDepend);
+                                done[slib] = true;
+                                if (target.action.addLaterDependency(slib)) {
                                     if (staticLib !is null) {
-                                        target.action.weakDepends[*slib] = true;
+                                        target.action.weakDepends[slib] = true;
                                     }
                                     if (slib.action !is null) {
                                         // The dependency isn't yet satisfied - we have to try again later
-                                        if (g_print_deps) say("%s depends on %s, which is not ready", target, *slib);
+                                        if (g_print_deps) say("%s depends on %s, which is not ready", target, slib);
                                         return true;
                                     }
                                 }
-                                directStaticLibs ~= *slib;
+                                directStaticLibs ~= slib;
                             }
                         }
                         else {
