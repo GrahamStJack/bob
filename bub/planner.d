@@ -1154,9 +1154,14 @@ bool doAugmentAction(File target) {
                         }
                     }
                     // Recurse into dlib's contained static libs
-                    foreach (lib; dlib.staticLibs) {
-                        if (accumulate(lib)) {
-                            return true;
+                    // Disabled because explicit linking to indirect shared libraries is not appropriate for modern compilers
+                    if (false) {
+                        foreach (containedSLib; dlib.staticLibs) {
+                            foreach (lib; containedSLib.reqStaticLibs) {
+                                if (accumulate(lib)) {
+                                    return true;
+                                }
+                            }
                         }
                     }
                 }
