@@ -147,6 +147,7 @@ int main(string[] args) {
 
         // Set environment variables found in the environment file so that workers get them
         if (exists("environment")) {
+            auto buildDir = getcwd();
             string envContent = readText("environment");
             foreach (line; splitLines(envContent)) {
                 string[] tokens = line.split("=");
@@ -163,7 +164,7 @@ int main(string[] args) {
                         name = tokens2[1];
                     }
 
-                    value = value.replace("${BUILD_PATH}", ".");
+                    value = value.replace("${BUILD_PATH}", buildDir);
 
                     if (name != "BUILD_PATH") {
                         environment[name] = value;
@@ -189,9 +190,10 @@ int main(string[] args) {
         auto preBuild = getOption("PRE_BUILD");
         if (preBuild.length > 0) {
             string command = preBuild ~ " " ~ unprocessed.escapeShellCommand;
+            say("Running pre-build command: %s", command);
             auto rc = executeShell(command);
             if (rc.status != 0) {
-                fatal("%s failed with:\n%s", command, rc.output);
+                fatal("%s failed with code %s, output:\n%s", command, rc.status, rc.output);
             }
         }
         else if (unprocessed.length > 0) {
