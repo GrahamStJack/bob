@@ -242,9 +242,7 @@ void establishBuildDir(string          exeName,
                           "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec %s \"$@\"\n",
                           buildDirRelative, funky);
         }
-        update(buildPath(buildDir,   "run"),  runText(".",  ""),                                  true);
-        update(buildPath(scriptsDir, "gdb"),  runText("..", "gdb --args"),                        true);
-        update(buildPath(scriptsDir, "perf"), runText("..", "perf record -g -f -o perf.log -- "), true);
+        update(buildPath(buildDir,   "run"),  runText(".",  ""), true);
     }
     version(Windows) {
         string runText = envText ~ "\n%1%";
