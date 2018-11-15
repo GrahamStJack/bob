@@ -1112,6 +1112,7 @@ bool doAugmentAction(File target) {
         }
     }
     else {
+        // Initially, the dynamic lib depends on its directly contained static libs
         errorUnless(dynamicLib !is null, target.origin, "Expected %s to be a dynamic lib", target);
         directStaticLibs = dynamicLib.staticLibs;
     }
@@ -1124,7 +1125,7 @@ bool doAugmentAction(File target) {
     //
     // Translate direct static libs into a rolled-up list of all the libraries
     // that the target will need to link with, returning true if an unsatisfied depedency
-    // on a dynamic lib is added
+    // on a dynamic or static lib is added
     //
 
     bool[Object] done;
@@ -1174,6 +1175,12 @@ bool doAugmentAction(File target) {
                                 "Dynamic library %s cannot link with static lib %s - add it to a dynamic library",
                                 dynamicLib, slib);
                     neededStaticLibs ~= slib;
+                    if (target.action.addLaterDependency(slib)) {
+                        if (slib.action !is null) {
+                            if (g_print_deps) say("%s depends on %s, which is not ready", target, slib);
+                            return true;
+                        }
+                    }
                 }
                 // Regardless, recurse into slib's required static libs
                 foreach (lib; slib.reqStaticLibs) {
