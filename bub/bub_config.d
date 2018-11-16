@@ -225,12 +225,8 @@ void establishBuildDir(string          exeName,
     update(envPath, envText, false);
 
 
-    // Create assorted run-like scripts
+    // Create the run script
     version(Posix) {
-        string scriptsDir = buildPath(buildDir, "scripts");
-        if (!scriptsDir.exists) {
-            scriptsDir.mkdir;
-        }
         string runText(string buildDirRelative, string funky) {
             return format("#!/bin/bash\n" ~
                           "if [ $# -eq 0 ]; then\n" ~
@@ -242,7 +238,7 @@ void establishBuildDir(string          exeName,
                           "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec %s \"$@\"\n",
                           buildDirRelative, funky);
         }
-        update(buildPath(buildDir,   "run"),  runText(".",  ""), true);
+        update(buildPath(buildDir, "run"),  runText(".", ""), true);
     }
     version(Windows) {
         string runText = envText ~ "\n%1%";
