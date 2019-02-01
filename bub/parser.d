@@ -413,7 +413,7 @@ Statement[] readBubfile(string path) {
 
     string content = readText(path);
 
-    int          anchor;
+    size_t       anchor;
     bool         inWord;
     bool         inComment;
     bool         waitingForOpeningParen;
@@ -426,7 +426,7 @@ Statement[] readBubfile(string path) {
         architectures[architecture] = true;
     }
 
-    void processWord(int pos, char ch) {
+    void processWord(size_t pos, char ch) {
         if (inWord) {
             inWord = false;
             string word = content[anchor .. pos];
@@ -463,7 +463,7 @@ Statement[] readBubfile(string path) {
         }
     }
 
-    foreach (int pos, char ch; content) {
+    foreach (pos, ch; content) {
         if (ch == '\n') {
             ++origin.line;
         }
