@@ -131,7 +131,7 @@ void doWork(bool printActions, uint index) {
         if (isTest) {
             // TODO add the timeout parameter to the message so that each test can specify
             //      its own timeout
-            command = "timeout --foreground 1m " ~ command;
+            command = "timeout --foreground 2m " ~ command;
         }
 
         auto output = std.stdio.File(resultsPath, "w");
