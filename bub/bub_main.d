@@ -213,7 +213,7 @@ int main(string[] args) {
         }
 
         // Build everything
-        if (!doPlanning(workerTids, dotPath)) {
+        if (!doPlanning(workerTids, dotPath, args[0])) {
             returnValue = 1;
         }
     }

@@ -2119,10 +2119,25 @@ void flushFileList() {
 //
 // Planner function
 //
-bool doPlanning(Tid[] workerTids, string dotPath) {
+bool doPlanning(Tid[] workerTids, string dotPath, string arg0) {
 
     int needed;
     try {
+        // Verify that the build directory's configuration is up to date
+        {
+            string bubConfig;
+            if (arg0.dirName != ".") {
+                bubConfig = buildPath(arg0.dirName, "bub-config");
+            }
+            else {
+                bubConfig = "bub-config";
+            }
+            auto rc = executeShell(bubConfig ~ " --check");
+            if (rc.status != 0) {
+                fatal("\nThe build directory's configuration is STALE - you need to re-configure the build directory");
+            }
+        }
+
         // Read the project's Bubfiles
         auto project = new Pkg(Origin(), null, "", Privacy.PRIVATE);
         File.options = new File(Origin(), project, "Buboptions", Privacy.PUBLIC, "Buboptions", false);

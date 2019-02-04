@@ -378,10 +378,11 @@ void parseBundle(string           bundle,
                  ref Locations    repos,
                  ref Locations    packages,
                  ref string[]     pkgNames,
-                 ref bool[string] bundlesDone) {
+                 ref bool[string] bundlesDone,
+                 bool             verbose) {
     if (bundle !in bundlesDone) {
         bundlesDone[bundle] = true;
-        writefln("Incorporating bundle at %s", bundle);
+        if (verbose) { writefln("Incorporating bundle at %s", bundle); }
 
         string repo;
         string root;
@@ -399,7 +400,8 @@ void parseBundle(string           bundle,
 
                 if (name == "BUNDLES") {
                     foreach (item; items) {
-                        parseBundle(buildNormalizedPath(bundle.dirName, item), repos, packages, pkgNames, bundlesDone);
+                        parseBundle(buildNormalizedPath(bundle.dirName, item),
+                                    repos, packages, pkgNames, bundlesDone, verbose);
                     }
                 }
                 else if (name == "REPO") {
@@ -411,7 +413,7 @@ void parseBundle(string           bundle,
                                 "Can't find dir " ~ repo ~
                                 " - REPO value must be relative path to a repo directory " ~ repo);
                         repos[repo.baseName] = repo;
-                        writefln("Added repo %s at %s", repo.baseName, repo);
+                        if (verbose) { writefln("Added repo %s at %s", repo.baseName, repo); }
                     }
                 }
                 else if (name == "ROOT") {
@@ -431,7 +433,7 @@ void parseBundle(string           bundle,
                         enforce(item !in packages, "Duplicate CONTAIN " ~ item);
                         packages[item] = path;
                         pkgNames ~= item;
-                        writefln("Contain top-level package %s at %s", item, path);
+                        if (verbose) { writefln("Contain top-level package %s at %s", item, path); }
                     }
                 }
                 else {
@@ -470,6 +472,8 @@ void parseConfig(string        configFile,
         exit(1);
     }
     writefln("Using config file %s", configFile);
+
+    vars.append("CONFIG_FILE", [buildNormalizedPath(std.file.getcwd(), configFile)], AppendType.notExist);
 
     foreach (string line; configFile.readText.splitLines) {
 
@@ -616,8 +620,92 @@ void parseConfig(string        configFile,
     // Transitively parse the bundle files
     bool[string] bundlesDone;
     foreach (bundle; initialBundles) {
-        parseBundle(bundle.absolutePath.buildNormalizedPath, repos, packages, pkgNames, bundlesDone);
+        parseBundle(bundle.absolutePath.buildNormalizedPath, repos, packages, pkgNames, bundlesDone, true);
     }
+}
+
+
+//
+// Check that the current directory looks like a build directory, and contains a top-level
+// Bubfle that is consistent with the configuration file.
+//
+int performCheck() {
+    // Basic checks
+    string optionsPath = "Buboptions";
+    if (!optionsPath.exists) {
+        writefln("Cannot find %s - this doesn't look like a build directory", optionsPath);
+        return 1;
+    }
+    string bubfilePath = buildPath("src", "Bubfile");
+    if (!bubfilePath.exists) {
+        writefln("Cannot find %s - this doesn't look like a build directory", bubfilePath);
+        return 1;
+    }
+
+    // Read the configuration file's path from the Bubfile
+    string configPath;
+    foreach (line; optionsPath.readText.splitLines) {
+        string[] tokens = line.split;
+        if (tokens.length == 3 && tokens[0] == "CONFIG_FILE") {
+            configPath = tokens[2];
+            break;
+        }
+    }
+    if (configPath == "") {
+        writefln("Cannot find CONFIG_FILE option");
+        return 1;
+    }
+    if (!configPath.exists) {
+        writefln("Cannot find %s - this build directory is broken", configPath);
+        return 1;
+    }
+
+    // Get the list of bundles files from the config file
+    string[] bundles;
+    foreach (line; configPath.readText.splitLines) {
+        string[] tokens = line.split;
+        if (tokens.length > 2 && tokens[0] == "BUNDLES") {
+            bundles = tokens[2..$];
+            break;
+        }
+    }
+    if (bundles.length == 0) {
+        writefln("Cannot find bundles in %s - this build directory is broken", configPath);
+        return 1;
+    }
+
+    // Read the bundles files
+
+    Locations    repos;
+    Locations    packages;
+    string[]     pkgNames;
+    bool[string] done;
+
+    foreach (bundle; bundles) {
+        parseBundle(buildNormalizedPath(configPath.dirName, bundle), repos, packages, pkgNames, done, false);
+    }
+
+    string expected = "contain";
+    foreach (name; pkgNames) {
+        expected ~= " " ~ name;
+    }
+    expected ~= ";";
+
+    // Read the top-level Bubfile's package names
+    string[] content = bubfilePath.readText.splitLines;
+
+    if (content.length != 1) {
+        writefln("%s has the wrong number of lines (expected 1)\n\n", bubfilePath);
+        return 1;
+    }
+
+    // And here is the check we really want to do - did the list of packages change?
+    if (content[0] != expected) {
+        writefln("%s is out of date\n\nExpected\n%s\n\nGot\n%s\n\n", bubfilePath, expected, content[0]);
+        return 1;
+    }
+
+    return 0;
 }
 
 
@@ -630,14 +718,16 @@ int main(string[] args) {
     // Parse command-line arguments.
     //
 
-    bool     help;
-    string   mode;
-    string   configFile = "bub.cfg";
+    bool   help;
+    bool   check;
+    string mode;
+    string configFile = "bub.cfg";
 
     try {
         getopt(args,
                std.getopt.config.caseSensitive,
                "help",   &help,
+               "check",  &check,
                "mode",   &mode,
                "config", &configFile);
     }
@@ -646,18 +736,27 @@ int main(string[] args) {
         help = true;
     }
 
-    if (help || args.length != 2 || !mode.length) {
+    if (help || (!check && (args.length != 2 || !mode.length))) {
         writefln("Usage: %s [options] build-dir-path\n" ~
                  "  --help                Display this message.\n" ~
+                 "  --check               Check the top-level Bubfile.\n" ~
                  "  --mode=mode-name      Build mode.\n" ~
-                 "  --config=config-file  Specifies the config file. Default bub.cfg.\n",
+                 "  --config=config-file  Specifies the config file. Default bub.cfg.\n" ~
+                 "\n" ~
+                 "--check prevents setup of the build directory, and instead\n" ~
+                 "verifies that the current directory is a build directory with a\n" ~
+                 "top-level Bubfile that matches the source repo(s) bundles files.\n" ~
+                 "This option used by bub.\n",
                  args[0]);
         exit(1);
     }
 
+    if (check) {
+        return performCheck();
+    }
+
     string srcDir   = std.file.getcwd();
     string buildDir = buildNormalizedPath(srcDir, args[1]);
-
 
     //
     // Read config file and establish build dir.
