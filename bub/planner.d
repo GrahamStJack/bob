@@ -114,25 +114,30 @@ final class SysLib {
 //   establishes new dependencies on the libraries, which may cause the build of
 //   the dynamic library or executable to be delayed.
 //
-final class DependencyCache {
-    enum string dir    = "deps";
-    enum string prefix = dir ~ dirSeparator;
 
-    string[][string] dependencies;
+enum string depsDir    = "deps";
+enum string depsPrefix = depsDir ~ dirSeparator;
+enum string depsSuffix = ".deps";
+
+final class DependencyCache {
+
+    string[][string] dependencies; // dependendencies of each target
 
     this() {
         executeShell("rm DEPENDENCIES-*");
 
-        if (dir.exists && !dir.isDir) {
-            dir.remove;
+        if (depsDir.exists && !depsDir.isDir) {
+            depsDir.remove;
         }
 
-        if (dir.exists) {
-            foreach (DirEntry entry; dir.dirEntries(SpanMode.depth, false)) {
+        if (depsDir.exists) {
+            foreach (DirEntry entry; depsDir.dirEntries(SpanMode.depth, false)) {
                 if (entry.linkAttributes.attrIsFile) {
                     string path      = entry.name;
-                    string builtPath = path[prefix.length..$];
-                    dependencies[builtPath] = path.readText.split;
+                    if (path.endsWith(depsSuffix)) {
+                        string builtPath = path[depsPrefix.length .. path.length - depsSuffix.length];
+                        dependencies[builtPath] = path.readText.split;
+                    }
                 }
             }
         }
@@ -140,7 +145,7 @@ final class DependencyCache {
 
     void remove(string builtPath) {
         dependencies.remove(builtPath);
-        auto path = prefix ~ builtPath;
+        auto path = depsPrefix ~ builtPath ~ depsSuffix;
         if (path.exists) {
             path.remove;
         }
@@ -156,7 +161,7 @@ final class DependencyCache {
             }
         }
 
-        string path    = prefix ~ builtPath;
+        string path    = depsPrefix ~ builtPath ~ depsSuffix;
         string tmpPath = path ~ ".tmp";
         if (!path.dirName.exists) {
             path.dirName.mkdirRecurse;
@@ -1743,7 +1748,7 @@ void cleanDirs() {
         return false;
     }
 
-    void cleanDir(string name, string prefix = "") {
+    void cleanDir(string name) {
         if (name.exists && name.isDir) {
             bool[string] unwantedFiles;
             string[]     unwantedDirs;
@@ -1752,7 +1757,12 @@ void cleanDirs() {
             // Determine what is unwanted
             foreach (DirEntry entry; name.dirEntries(SpanMode.depth, false)) {
                 string path      = entry.name;
-                string builtPath = path[prefix.length..$];
+                string builtPath = path;
+
+                if (path.startsWith(depsPrefix) && path.endsWith(depsSuffix)) {
+                    builtPath = path[depsPrefix.length .. path.length - depsSuffix.length];
+                }
+
                 if (!entry.linkAttributes.attrIsDir) {
                     // A file
                     File* file = builtPath in File.byPath;
@@ -1789,9 +1799,9 @@ void cleanDirs() {
     cleanDir("obj");
     cleanDir("priv");
     cleanDir("dist");
-    cleanDir(buildPath("deps", "obj"),  "deps" ~ dirSeparator);
-    cleanDir(buildPath("deps", "priv"), "deps" ~ dirSeparator);
-    cleanDir(buildPath("deps", "dist"), "deps" ~ dirSeparator);
+    cleanDir(buildPath("deps", "obj"));
+    cleanDir(buildPath("deps", "priv"));
+    cleanDir(buildPath("deps", "dist"));
 }
 
 
