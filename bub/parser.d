@@ -372,7 +372,12 @@ string[] parseDeps(string path, string[] inputs) {
         string abs = buildNormalizedPath(cwd, dep);
         if (abs.startsWith(cwd)) {
             string rel = abs[cwd.length..$];
-            got[rel] = true;
+            if (rel.startsWith("src" ~ dirSeparator) ||
+                rel.startsWith("obj" ~ dirSeparator) ||
+                rel.dirName == ".")
+            {
+                got[rel] = true;
+            }
         }
     }
     return got.keys();
