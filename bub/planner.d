@@ -634,7 +634,6 @@ class File : Node {
     Origin     origin;
     string     path;           // the file's path
     int        number;         // order of file creation
-    int        translateGroup; // identifies the translation group of the file, if any
     bool       built;          // true if this file will be built by an action
     Action     action;         // the action used to build this file (null if non-built)
 
@@ -854,7 +853,6 @@ class File : Node {
         Node commonAncestor = commonAncestorWith(other);
 
         errorUnless(this.number > other.number ||
-                    (!other.built && this.translateGroup > 0 && this.translateGroup == other.translateGroup) ||
                     (this.parent == other.parent && this.privacy == Privacy.PUBLIC && other.privacy == Privacy.SEMI_PROTECTED) ||
                     other.isDescendantOf(this),
                     origin,
@@ -1477,7 +1475,7 @@ final class Exe : Binary {
 // destDir, or using a configured command to create the target file(s) if the
 // specified source file has a command extension.
 //
-// If the specified path is a directory, add all its contents instead.
+// If the specified path is a directory, translate all its contents instead.
 //
 // The initially specified files go into the destination without their preceding
 // directory. That is:
@@ -1485,16 +1483,16 @@ final class Exe : Binary {
 // * "translate doc : doc;" will translate all the files in doc into dist/doc
 // preserving any directory structure within doc.
 //
-// Dependency rules are relaxed slightly here to allow files added in a single call to
-// translateFile to depend on each other regardless of the order in which they are added.
+// In order to allow generated files added by a single translate rule to depend on
+// copied files in the same translate rule, we sort the files into those two
+// categories before adding them - thus copied files have a lower number than
+// generated ones.
 //
 void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
-    static int group;
-
-    ++group;
 
     string destDir  = dest == "" ? buildPath("priv", pkg.trail) : buildPath("dist", dest);
     string destOmit = "";
+
     if (buildPath("src", pkg.trail, name).isDir) {
         destOmit = name ~ dirSeparator;
     }
@@ -1502,65 +1500,72 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
         destOmit = name.dirName ~ dirSeparator;
     }
 
-    void translate(string relative) {
+    string srcOmit = buildPath("src", pkg.trail) ~ dirSeparator;
+
+    string[] copiedRels;
+    string[] generatedRels;
+
+    void collect(string relative) {
         string fromPath = buildPath("src", pkg.trail, relative);
 
         if (fromPath.isDir) {
-            string srcOmit = buildPath("src", pkg.trail) ~ dirSeparator;
-            foreach (string rel; dirEntries(fromPath, SpanMode.shallow)) {
-                translate(rel[srcOmit.length..$]);
+            // dir - recurse into it
+            foreach (string child; dirEntries(fromPath, SpanMode.shallow)) {
+                collect(child[srcOmit.length..$]);
             }
         }
         else {
-            // Create the source file
-            string ext        = relative.extension;
-            File   sourceFile = File.addSource(origin, pkg, relative, Privacy.PUBLIC);
-            sourceFile.translateGroup = group;
-
-            // Determine the destination path for a copy
-            string copyPath = buildPath(destDir, relative[destOmit.length..$]);
-
-            auto generate = ext in generateRules;
-            if (generate is null) {
-                // Target is a simple copy of source file, preserving execute permission
-                string fileName = copyPath.replace("/", "__") ~ "-copy";
-                File destFile = new File(origin, pkg, fileName, Privacy.PUBLIC, copyPath, true);
-                destFile.translateGroup = group;
-                destFile.action = new Action(origin,
-                                            pkg,
-                                            makeActionName("Copy", destFile.path),
-                                            "COPY ${INPUT} ${OUTPUT}",
-                                            [destFile],
-                                            [sourceFile]);
-                destFile.action.setGenerate;
+            // file - collect it
+            if (relative.extension !in generateRules) {
+                copiedRels ~= relative;
             }
             else {
-                // Generate the target file(s) using a configured command
-                File[] files;
-                string suffixes;
-                foreach (suffix; generate.suffixes) {
-                    string path = copyPath.stripExtension ~ suffix;
-                    File gen = new File(origin, pkg, path.baseName, Privacy.PRIVATE, path, true);
-                    gen.translateGroup = group;
-                    files    ~= gen;
-                    suffixes ~= suffix ~ " ";
-                }
-                errorUnless(files.length > 0, origin, "Must have at least one destination suffix");
-                Action genAction = new Action(origin,
-                                            pkg,
-                                            makeActionName(ext ~ "->" ~ suffixes, files[0].path),
-                                            generate.command,
-                                            files,
-                                            [sourceFile]);
-                genAction.setGenerate;
-                foreach (gen; files) {
-                    gen.action = genAction;
-                }
+                generatedRels ~= relative;
             }
         }
     }
 
-    translate(name);
+    collect(name);
+
+    foreach (relative; copiedRels) {
+        File   sourceFile = File.addSource(origin, pkg, relative, Privacy.PUBLIC);
+        string path       = buildPath(destDir, relative[destOmit.length..$]);
+
+        // Target is a simple copy of source file, preserving execute permission
+        File   destFile = new File(origin, pkg, relative ~ "-copy", Privacy.PUBLIC, path, true);
+        destFile.action = new Action(origin,
+                                     pkg,
+                                     makeActionName("Copy", destFile.path),
+                                     "COPY ${INPUT} ${OUTPUT}",
+                                     [destFile],
+                                     [sourceFile]);
+        destFile.action.setGenerate;
+    }
+
+    foreach (relative; generatedRels) {
+        File sourceFile = File.addSource(origin, pkg, relative, Privacy.PUBLIC);
+        auto generate   = relative.extension in generateRules;
+
+        // Generate one or more target files from the source using the generate command
+        File[] files;
+        string suffixes;
+        foreach (suffix; generate.suffixes) {
+            string path = buildPath(destDir, relative[destOmit.length..$]).stripExtension ~ suffix;
+            files    ~= new File(origin, pkg, relative.stripExtension ~ suffix, Privacy.PRIVATE, path, true);
+            suffixes ~= suffix ~ " ";
+        }
+        errorUnless(files.length > 0, origin, "Must have at least one destination suffix");
+        Action genAction = new Action(origin,
+                                      pkg,
+                                      makeActionName(relative.extension ~ "->" ~ suffixes, files[0].path),
+                                      generate.command,
+                                      files,
+                                      [sourceFile]);
+        genAction.setGenerate;
+        foreach (gen; files) {
+            gen.action = genAction;
+        }
+    }
 }
 
 //
