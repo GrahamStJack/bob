@@ -1,7 +1,7 @@
 Bub is a build tool written in D which supports building of large C/C++/D
 projects.
 
-Bub is written and maintained by Graham St Jack (Graham.StJack@internode.on.net).
+Bub is written and maintained by Graham St Jack (graham.stjack@internode.on.net).
 
 Some of bub's features that are useful on large projects are:
 
@@ -20,11 +20,7 @@ Some of bub's features that are useful on large projects are:
   are up to date.
 
 
-Bub is currently primarily developed and tested on Linux, but has also been partly
-tested on Windows.  It should work on OS-X.
+Bub is currently primarily developed and tested on Linux.
 
 
 To build on Linux, run 'make' in this directory.
-
-To build on Windows, run build_with_dmd.bat in this directory. Note that the
-Windows port is incomplete.

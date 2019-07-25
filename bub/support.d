@@ -41,45 +41,23 @@ import core.time;
 import core.bitop;
 import core.thread;
 
-//----------------------------------------------------------------------------------------
-// Platform-specific stuff
-//----------------------------------------------------------------------------------------
+import core.sys.posix.signal;
+import core.sys.posix.sys.stat;
+import core.sys.posix.unistd;
 
-version(Posix) {
-    import core.sys.posix.signal;
-    import core.sys.posix.sys.stat;
-    import core.sys.posix.unistd;
 
-    int mykill(int pid, int sig) {
-        return kill(pid, sig);
-    }
-
-    // Set the permissions of target to match the source
-    void setPermissions(string target, string source) {
-        stat_t sourceStat;
-        stat_t targetStat;
-        int rc = stat(toStringz(source), &sourceStat);
-        if (rc != 0) fatal("Unable to stat %s", source);
-        rc = stat(toStringz(target), &targetStat);
-        if (rc != 0) fatal("Unable to stat %s", target);
-        if (sourceStat.st_mode != targetStat.st_mode) {
-            // change target's permissions
-            rc = chmod(toStringz(target), sourceStat.st_mode);
-            if (rc != 0) fatal("Unable to chmod %s", target);
-        }
-    }
-}
-else version(Windows) {
-    // NOTE:
-    // The Windows port is a work in progress and hasn't been fully tested yet.
-    // The main sticking point is killing spawned processes - there doesn't seem to be
-    // a way of doing that for third-party processes (ie ones whose source you can't change).
-    // The work in progress is all those little issues like slash vs backslash.
-
-    import core.stdc.signal;
-
-    int mykill(int pid, int sig) {
-        return 0;
+// Set the permissions of target to match the source
+void setPermissions(string target, string source) {
+    stat_t sourceStat;
+    stat_t targetStat;
+    int rc = stat(toStringz(source), &sourceStat);
+    if (rc != 0) fatal("Unable to stat %s", source);
+    rc = stat(toStringz(target), &targetStat);
+    if (rc != 0) fatal("Unable to stat %s", target);
+    if (sourceStat.st_mode != targetStat.st_mode) {
+        // change target's permissions
+        rc = chmod(toStringz(target), sourceStat.st_mode);
+        if (rc != 0) fatal("Unable to chmod %s", target);
     }
 }
 
@@ -180,22 +158,67 @@ public:
 //------------------------------------------------------------------------------
 // Synchronized object that keeps track of which spawned processes
 // are in play, and raises SIGTERM on them when told to bail.
+// If SIGTERM doesn't get it done, raise SIGKILL after a short delay.
 //
 // bail() is called by the error() functions, which then throw an exception.
 //------------------------------------------------------------------------------
 
 class Killer {
     private {
+        enum Had { nothing, term, kill }
+
+        // Information about a child
+        struct Info {
+            string   action;
+            Had      had;
+            Duration untilSigTerm;
+            Duration untilSigKill;
+
+            this(string action, Duration duration) {
+                this.action = action;
+                had          = Had.nothing;
+                untilSigTerm  = duration;
+            }
+
+            // Do what this child is due for
+            void doWhatIsDue(Pid child, Duration interval) {
+                if (had == Had.nothing) {
+                    untilSigTerm -= interval;
+                    if (untilSigTerm <= 0.seconds) {
+                        //say("Raising SIGTERM on [%s]", action);
+                        untilSigKill = 2.seconds;
+                        had         = Had.term;
+                        kill(child.processID, SIGTERM);
+                    }
+                }
+                else if (had == had.term) {
+                    untilSigKill -= interval;
+                    if (untilSigKill <= 0.seconds) {
+                        say("Raising SIGKILL on [%s]", action);
+                        had = Had.kill;
+                        kill(child.processID, SIGKILL);
+                    }
+                }
+            }
+
+            void terminate(Pid child) {
+                if (had == Had.nothing) {
+                    untilSigTerm = 0.seconds;
+                    doWhatIsDue(child, 0.seconds);
+                }
+            }
+        }
+
         bool      bailed;
-        bool[Pid] children;
+        Info[Pid] children;
     }
 
     // remember that a process has been launched, killing it if we have bailed
-    void launched(string worker, Pid child) {
+    void launched(string worker, string action, Pid child, int secs) {
         synchronized(this) {
-            children[child] = true;
+            children[child] = Info(action, secs.seconds);
             if (bailed) {
-                mykill(child.processID, SIGTERM);
+                children[child].terminate(child);
             }
         }
     }
@@ -207,18 +230,29 @@ class Killer {
         }
     }
 
-    // bail, doing nothing if we had already bailed
-    bool bail() {
+    // Do periodic processing, returning true if children remain
+    bool periodic(Duration interval) {
+        synchronized(this) {
+            foreach (child, ref info; children) {
+                info.doWhatIsDue(child, interval);
+            }
+            return children.length > 0;
+        }
+    }
+
+    // initiate termination of all remaining children
+    bool bail(string initiator) {
         synchronized(this) {
             if (!bailed) {
+                say("%s terminating the build", initiator);
                 bailed = true;
-                foreach (child; children.keys()) {
-                    mykill(child.processID, SIGTERM);
+                foreach (child, ref info; children) {
+                    info.terminate(child);
                 }
-                return false;
+                return true;
             }
             else {
-                return true;
+                return false;
             }
         }
     }
@@ -232,28 +266,39 @@ shared static this() {
 
 
 //-----------------------------------------------------------------------
-// Signal handling to bail on SIGINT or SIGHUP.
+// Signal handling to bail on SIGINT, SIGTERM or SIGHUP.
 //-----------------------------------------------------------------------
 
 __gshared ubyte bailSignal = 0;
 
 void doBailer() {
+    Duration interval = 50.msecs;
+
     try {
         // Wait until it is time to call killer.bail(), or to terminate
         while (volatileLoad(&bailSignal) == 0)
         {
             // Wait for a short while to see if our owner has terminated,
             // in which case we get an exception.
-            receiveTimeout(50.msecs, (bool bogus) {});
-        }
+            receiveTimeout(interval, (bool bogus) {});
 
-        if (volatileLoad(&bailSignal) != 0)
-        {
-            say("Got a termination signal=%s - bailing", bailSignal);
-            killer.bail();
+            // Poll the killer for anything it wants to do
+            killer.periodic(interval);
         }
     }
-    catch (Exception ex) {} // Owner has terminated - do so as well
+    catch (Exception ex) {}
+
+    auto sig = volatileLoad(&bailSignal);
+    if (sig != 0) {
+        // We got a signal - initiate death of all remaining children
+        killer.bail(format("Got signal %s - ", sig));
+    }
+
+    // Animate the killer until all children have terminated
+    do {
+        Thread.sleep(interval);
+    }
+    while (killer.periodic(interval));
 }
 
 extern (C) void mySignalHandler(int sig) nothrow @nogc @system {
@@ -261,11 +306,10 @@ extern (C) void mySignalHandler(int sig) nothrow @nogc @system {
 }
 
 shared static this() {
-    // Register a signal handler for SIGINT and SIGHUP.
-    signal(SIGINT, &mySignalHandler);
-    version(Posix) {
-        signal(SIGHUP, &mySignalHandler);
-    }
+    // Register a signal handler for SIGTERM, SIGINT and SIGHUP.
+    signal(SIGTERM, &mySignalHandler);
+    signal(SIGINT,  &mySignalHandler);
+    signal(SIGHUP,  &mySignalHandler);
 }
 
 
@@ -303,7 +347,7 @@ void say(A...)(string fmt, A a) {
 
 void fatal(A...)(string fmt, A a) {
     say(fmt, a);
-    killer.bail();
+    killer.bail("fatal error");
     throw new BailException();
 }
 

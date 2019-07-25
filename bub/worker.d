@@ -28,6 +28,7 @@ import std.path;
 import std.process;
 import std.string;
 import std.concurrency;
+import std.conv;
 
 static import std.stdio;
 
@@ -43,7 +44,6 @@ void tryRemove(string path) {
         }
     }
 }
-
 
 //
 // The worker function.
@@ -62,7 +62,7 @@ void doWork(bool printActions, uint index) {
 
     env["TMP_PATH"] = tmpPath;
 
-    void perform(string action, string command, string targets) {
+    void perform(string action, string command, string targets, int secs) {
         success = false;
         if (printActions) { say("\n%s", command); }
 
@@ -127,17 +127,10 @@ void doWork(bool printActions, uint index) {
         }
 
         // launch child process to do the action, then wait for it to complete
-
-        if (isTest) {
-            // TODO add the timeout parameter to the message so that each test can specify
-            //      its own timeout
-            command = "timeout --foreground 2m " ~ command;
-        }
-
         auto output = std.stdio.File(resultsPath, "w");
         try {
             Pid child = spawnShell(command, std.stdio.stdin, output, output, env);
-            killer.launched(myName, child);
+            killer.launched(myName, action, child, secs);
             success = wait(child) == 0;
             killer.completed(myName, child);
         }
@@ -155,9 +148,7 @@ void doWork(bool printActions, uint index) {
                 }
             }
 
-            bool bailed = killer.bail();
-
-            if (!bailed) {
+            if (killer.bail(myName)) {
                 // Print error message
                 if (isTest) {
                     // For tests, move the test output to a file alongside the success file,
@@ -224,8 +215,8 @@ void doWork(bool printActions, uint index) {
     try {
         while (true) {
             receive(
-                (string action, string command, string targets) {
-                    perform(action, command, targets);
+                (string action, string command, string targets, string secs) {
+                    perform(action, command, targets, to!int(secs));
                 }
             );
         }

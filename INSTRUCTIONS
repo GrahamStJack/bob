@@ -320,10 +320,12 @@ Executable
 ~~~~~~~~~~
 
 dist-exe exe-name : source [: required-sys-libs];
-test-exe exe-name : source [: required-sys-libs];
+test-exe exe-name : source [: required-sys-libs] [: timeout-seconds] [: runtime-dependencies];
 priv-exe exe-name : source [: required-sys-libs];
 
-eg: test-exe math-test : math_test.cpp;
+eg: priv-exe stuff      : stuff.cc;
+    test-exe math-test  : math_test.cpp;
+    test-exe funky-test : funky_test.cpp : dl : 30 : priv/math/stuff;
 
 See static-lib for the meaning of required-syslibs.
 
@@ -334,9 +336,9 @@ priv-exe places the build executable in the priv/<trail> directory.
 test-exe places the built executable in the priv/<trail> directory,
 and executes the test when its result file is out of date.
 
-The test is run with a command-line argument --tmp=<path>, where
-<path> is a temporary directory that the test can use for scratch files
-if necessary. The temporary directory is deleted if the test passes.
+The test is run with the TMP_PATH enviroment set to a suitable location for
+the test to use for scratch files if necessary. The temporary directory
+is deleted if the test passes.
 
 
 Scripts, data and docs

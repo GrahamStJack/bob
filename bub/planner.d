@@ -30,6 +30,7 @@ import std.range;
 import std.string;
 import std.process;
 import std.concurrency;
+import std.conv;
 
 static import std.array;
 
@@ -190,6 +191,7 @@ final class Action {
     Origin     origin;
     string     name;        // The name of the action
     string     command;     // The action command-string
+    int        secs;        // The action timeout in seconds
     int        number;      // Influences build order
     File[]     inputs;      // The files that constitute this action's INPUT
     File[]     builds;      // Files that constitute this action's OUTPUT
@@ -204,13 +206,15 @@ final class Action {
     string     culprit;     // The path of the first dependency that dirtied the action
     bool       issued;      // True if the action has been queued for processing
 
-    this(Origin origin_, Pkg pkg, string name_, string command_, File[] builds_, File[] inputs_) {
+    this(Origin origin_, Pkg pkg, string name_, string command_,
+         File[] builds_, File[] inputs_, int secs_ = 300) {
         origin   = origin;
         name     = name_;
         command  = command_;
         number   = nextNumber++;
-        inputs   = inputs_;
         builds   = builds_;
+        inputs   = inputs_;
+        secs     = secs_;
         ordered ~= this;
         errorUnless(name !in byName, origin, "Duplicate command name=%s", name);
         byName[name] = this;
@@ -1428,7 +1432,7 @@ final class Exe : Binary {
     // that contain any included header files, and any required system libraries.
     // Note that any system libraries required by inferred local libraries are
     // automatically linked to.
-    this(ref Origin origin, Pkg pkg, string kind, string name_, string[] sourceNames, string[] sysLibs) {
+    this(ref Origin origin, Pkg pkg, string kind, string name_, string[] sourceNames, string[] sysLibs, int testSecs, string[] testDeps) {
         string destination() {
             switch (kind) {
             case "dist-exe": return buildPath("dist", "bin", name_);
@@ -1451,16 +1455,26 @@ final class Exe : Binary {
         auto rule = sourceExt in exeRules;
         errorUnless(rule !is null, origin, "No command to link exe from %s", sourceExt);
 
-        action = new Action(origin, pkg, makeActionName(description(), path), rule.command, [this], objs);
+        action = new Action(origin, pkg, makeActionName(description(), path),
+                            rule.command, [this], objs);
 
         if (kind == "test-exe") {
-            File result = new File(origin, pkg, name ~ "-result", Privacy.PRIVATE, path ~ "-passed", true);
+            // test-exe also generates a test result file by running the test
+            File result = new File(origin, pkg, name ~ "-result",
+                                   Privacy.PRIVATE, path ~ "-passed", true);
             result.action = new Action(origin,
                                        pkg,
                                        makeActionName("TestResult", result.path),
                                        format("TEST %s", this.path),
                                        [result],
-                                       [this]);
+                                       [this],
+                                       testSecs);
+
+            foreach (depPath; testDeps) {
+                auto dep = depPath in File.byPath;
+                errorUnless(dep !is null, origin, "Unknown test dependency path %s", depPath);
+                result.action.addDependency(*dep);
+            }
         }
     }
 
@@ -1610,7 +1624,7 @@ void generateFile(ref Origin origin,
 //
 // Process a Bubfile
 //
-void processBubfile(string indent, Pkg pkg) {
+void processBubfile(string indent, Pkg pkg, int maxTestSecs) {
     static bool[Pkg] processed;
     if (pkg in processed) return;
     processed[pkg] = true;
@@ -1625,7 +1639,7 @@ void processBubfile(string indent, Pkg pkg) {
                 foreach (name; statement.targets) {
                     Privacy privacy = privacyOf(statement.origin, statement.arg1);
                     Pkg newPkg = new Pkg(statement.origin, pkg, name, privacy);
-                    processBubfile(indent, newPkg);
+                    processBubfile(indent, newPkg, maxTestSecs);
                 }
             break;
 
@@ -1667,12 +1681,33 @@ void processBubfile(string indent, Pkg pkg) {
                 errorUnless(statement.targets.length == 1,
                             statement.origin,
                             "Can only have one exe name per statement");
+                int testSecs = 60; // default timeout for tests
+                if (statement.rule == "test-exe") {
+                    if (statement.arg3.length > 0) {
+                        try {
+                            testSecs = to!int(statement.arg3[0]);
+                        }
+                        catch (Exception ex) {
+                            error(statement.origin,
+                                  "test-exe timeout parameter '%s' doesn't look like an integer",
+                                  statement.arg3);
+                        }
+                    }
+                }
+
+                if (statement.rule == "test-exe" && testSecs > maxTestSecs) {
+                    // Suppress execution of the test
+                    statement.rule = "priv-exe";
+                }
+
                 Exe exe = new Exe(statement.origin,
                                   pkg,
                                   statement.rule,
                                   statement.targets[0],
                                   statement.arg1,
-                                  statement.arg2);
+                                  statement.arg2,
+                                  testSecs,
+                                  statement.arg4);
             }
             break;
 
@@ -2134,7 +2169,7 @@ void flushFileList() {
 //
 // Planner function
 //
-bool doPlanning(Tid[] workerTids, string dotPath, string arg0) {
+bool doPlanning(Tid[] workerTids, string dotPath, int maxTestSecs, string arg0) {
 
     int needed;
     try {
@@ -2156,7 +2191,7 @@ bool doPlanning(Tid[] workerTids, string dotPath, string arg0) {
         // Read the project's Bubfiles
         auto project = new Pkg(Origin(), null, "", Privacy.PRIVATE);
         File.options = new File(Origin(), project, "Buboptions", Privacy.PUBLIC, "Buboptions", false);
-        processBubfile("", project);
+        processBubfile("", project, maxTestSecs);
 
         // Update files that contain lists of known non-binary files and include directories
         // that may be of assistance for users with IDEs that don't understand compile_commands.json.
@@ -2221,7 +2256,7 @@ bool doPlanning(Tid[] workerTids, string dotPath, string arg0) {
                     else {
                         say("%s", next.name);
                     }
-                    workerTids[index].send(next.name, next.command, targets);
+                    workerTids[index].send(next.name, next.command, targets, to!string(next.secs));
                 }
                 else {
                     // The action doesn't need to be performed - mark all its targets as up to date,

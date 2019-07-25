@@ -399,6 +399,7 @@ struct Statement {
     string[] arg1;
     string[] arg2;
     string[] arg3;
+    string[] arg4;
 
     string toString() const {
         string result;
@@ -407,6 +408,7 @@ struct Statement {
         if (phase >= 3) result ~= format(" : %s", arg1);
         if (phase >= 4) result ~= format(" : %s", arg2);
         if (phase >= 5) result ~= format(" : %s", arg3);
+        if (phase >= 6) result ~= format(" : %s", arg4);
         return result;
     }
 }
@@ -459,6 +461,9 @@ Statement[] readBubfile(string path) {
                     }
                     else if (statement.phase == 4) {
                         statement.arg3 ~= word;
+                    }
+                    else if (statement.phase == 5) {
+                        statement.arg4 ~= word;
                     }
                     else {
                         error(origin, "Too many arguments in %s", path);

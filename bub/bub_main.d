@@ -73,6 +73,7 @@ int main(string[] args) {
         bool clean           = false;
         bool help            = false;
         uint numJobs         = 1;
+        int  testSecs        = 60;
 
         try {
             getopt(args,
@@ -84,6 +85,7 @@ int main(string[] args) {
                    "actions|a",      &printActions,
                    "dot",            &dotPath,
                    "jobs|j",         &numJobs,
+                   "test|t",         &testSecs,
                    "clean|c",        &clean,
                    "help|h",         &help,
                    std.getopt.config.passThrough);
@@ -115,7 +117,8 @@ int main(string[] args) {
                 "  --actions        print actions\n" ~
                 "  --dot=<path>     write dependency graph for dist-exe at <path> to depends.dot\n" ~
                 "  --details        print heaps of details\n" ~
-                "  --jobs=VALUE     maximum number of simultaneous actions\n" ~
+                "  --jobs=VALUE     maximum number of simultaneous actions (default is 1)\n" ~
+                "  --test=SECS      execute tests with timeout <= SECS (default is 60)\n" ~
                 "  --clean          just remove all built files\n" ~
                 "  --help           show this message\n" ~
                 "target is everything contained in the project Bubfile and anything referred to.");
@@ -213,7 +216,7 @@ int main(string[] args) {
         }
 
         // Build everything
-        if (!doPlanning(workerTids, dotPath, args[0])) {
+        if (!doPlanning(workerTids, dotPath, testSecs, args[0])) {
             returnValue = 1;
         }
     }
