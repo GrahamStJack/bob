@@ -235,7 +235,7 @@ void establishBuildDir(string          exeName,
                           "fi\n" ~
                           "source $(dirname \"${BASH_SOURCE[0]}\")/%s/environment\n" ~
                           "export TMP_PATH=\"${BUILD_PATH}/tmp/tmp-$(basename \"${1}\")\"\n" ~
-                          "rm -rf \"${TMP_PATH}\" && mkdir \"${TMP_PATH}\" && exec %s \"$@\"\n",
+                          "rm -rf \"${TMP_PATH}\" && mkdir -p \"${TMP_PATH}\" && exec %s \"$@\"\n",
                           buildDirRelative, funky);
         }
         update(buildPath(buildDir, "run"),  runText(".", ""), true);
