@@ -227,18 +227,14 @@ void establishBuildDir(string          exeName,
 
     // Create the run script
     version(Posix) {
-        string runText(string buildDirRelative, string funky) {
-            return format("#!/bin/bash\n" ~
-                          "if [ $# -eq 0 ]; then\n" ~
-                          "    echo 'Expected parameters specifying the command to run'\n" ~
-                          "    exit 1\n" ~
-                          "fi\n" ~
-                          "source $(dirname \"${BASH_SOURCE[0]}\")/%s/environment\n" ~
-                          "export TMP_PATH=\"${BUILD_PATH}/tmp/tmp-$(basename \"${1}\")\"\n" ~
-                          "rm -rf \"${TMP_PATH}\" && mkdir -p \"${TMP_PATH}\" && exec %s \"$@\"\n",
-                          buildDirRelative, funky);
-        }
-        update(buildPath(buildDir, "run"),  runText(".", ""), true);
+        string runText = "#!/bin/bash\n" ~
+                         "if [ $# -eq 0 ]; then\n" ~
+                         "    echo 'Expected parameters specifying the command to run'\n" ~
+                         "    exit 1\n" ~
+                         "fi\n" ~
+                         "source $(dirname \"${BASH_SOURCE[0]}\")/environment\n" ~
+                         "exec \"$@\"\n";
+        update(buildPath(buildDir, "run"),  runText, true);
     }
     version(Windows) {
         string runText = envText ~ "\n%1%";

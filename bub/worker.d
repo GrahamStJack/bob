@@ -60,8 +60,6 @@ void doWork(bool printActions, uint index) {
     string         tmpPath     = buildPath("tmp", myName ~ "-tmp");
     string[string] env;
 
-    env["TMP_PATH"] = tmpPath;
-
     void perform(string action, string command, string targets, int secs) {
         success = false;
         if (printActions) { say("\n%s", command); }
@@ -111,9 +109,9 @@ void doWork(bool printActions, uint index) {
         }
 
         else if (isTest) {
-            // Do test preparation - make the tmp dir as a convenience
-            // FIXME - remove the need to create it
+            // Do test preparation - make the tmp dir and set TMPDIR to point to it
             mkdir(tmpPath);
+            env["TMPDIR"] = tmpPath;
             command = command[5 .. $];
         }
 
