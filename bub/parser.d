@@ -427,10 +427,13 @@ Statement[] readBubfile(string path) {
     bool         waitingForClosingParen;
     bool         usingText = true;
     Statement    statement;
-    bool[string] architectures;
+    bool[string] conditionals;
 
-    foreach (architecture; split(getOption("ARCHITECTURE"))) {
-        architectures[architecture] = true;
+    foreach (conditional; split(getOption("CONDITIONALS"))) {
+        // Special case - allow resolvable conditionals
+        string[string] noExtras;
+        string cond = resolveCommand(conditional, noExtras, []);
+        conditionals[cond] = true;
     }
 
     void processWord(size_t pos, char ch) {
@@ -441,7 +444,7 @@ Statement[] readBubfile(string path) {
             if (word.length > 2 && word[0] == '[' && ch == ']') {
                 // Start of a conditional
                 waitingForOpeningParen = true;
-                usingText              = (word[1..$] in architectures) !is null;
+                usingText              = (word[1..$].strip in conditionals) !is null;
             }
             else {
                 if (word.length > 0) {

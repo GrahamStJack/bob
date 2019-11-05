@@ -189,17 +189,17 @@ where a parameter is a space-separated list of tokens.
 Conditional Bubfile content
 ~~~~~~~~~~~~~~~~~~~~~~~~~~~
 
-A Bubfile can contain configuration-dependent parts via the ARCHITECTURE
+A Bubfile can contain configuration-dependent parts via the CONDITIONALS
 variable defined in the configuration file, like so:
 
 [value] ( content )
 
 Where whitespace is not significant, and only whitespace can appear between ']' and '(',
 and ')' can only be used to terminate a bracketed section.
-The bracketed text is ignored unless ARCHITECTURE contains the specified value. For example, if
+The bracketed text is ignored unless CONDITIONALS contains the specified value. For example, if
 
 bub.cfg contains:
-  ARCHITECTURE = Posix
+  CONDITIONALS = Posix
 
 and a Bubfile contains:
   static-lib foo :
