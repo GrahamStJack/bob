@@ -679,7 +679,7 @@ class File : Node {
     static File addSource(Origin origin, Node parent, string extra, Privacy privacy) {
 
         // possible paths to the file
-        string path1 = prospectivePath("obj", parent, extra);  // a built file in obj directory tree
+        string path1 = prospectivePath("gen", parent, extra);  // a built file in gen directory tree
         string path2 = prospectivePath("src", parent, extra);  // a source file in src directory tree
 
         string name = extra.replace("/", "__");
@@ -913,7 +913,7 @@ string validateExtension(Origin origin, string newExt, string usingExt) {
 
 // Free function to format an action name.
 string makeActionName(string rule, string description) {
-    return format("%-15s %s", rule, description);
+    return format("%-15s %s", rule.strip, description.strip);
 }
 
 //
@@ -997,7 +997,7 @@ abstract class Binary : File {
                 string suffixes;
                 foreach (suffix; generate.suffixes) {
                     string destName = stripExtension(name) ~ suffix;
-                    string destPath = buildPath("obj", parent.trail, destName);
+                    string destPath = buildPath("gen", parent.trail, destName);
                     File gen = new File(origin, this, destName, privacy, destPath, true);
                     files    ~= gen;
                     suffixes ~= suffix ~ " ";
@@ -1836,9 +1836,11 @@ void cleanDirs() {
         }
     }
 
+    cleanDir("gen");
     cleanDir("obj");
     cleanDir("priv");
     cleanDir("dist");
+    cleanDir(buildPath("deps", "gen"));
     cleanDir(buildPath("deps", "obj"));
     cleanDir(buildPath("deps", "priv"));
     cleanDir(buildPath("deps", "dist"));

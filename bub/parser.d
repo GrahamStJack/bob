@@ -160,7 +160,7 @@ void readOptions() {
     }
 
     // Hard-coded options
-    options["PROJ_INC"] = "src obj .";
+    options["PROJ_INC"] = "src gen .";
     options["PROJ_LIB"] = buildPath("dist", "lib") ~ " obj";
 }
 
@@ -373,7 +373,7 @@ string[] parseDeps(string path, string[] inputs) {
         if (abs.startsWith(cwd)) {
             string rel = abs[cwd.length..$];
             if (rel.startsWith("src" ~ dirSeparator) ||
-                rel.startsWith("obj" ~ dirSeparator) ||
+                rel.startsWith("gen" ~ dirSeparator) ||
                 rel.dirName == ".")
             {
                 got[rel] = true;
