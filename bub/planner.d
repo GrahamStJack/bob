@@ -1483,11 +1483,10 @@ final class Exe : Binary {
     }
 }
 
-
 //
 // Add a translate file and its target(s), either copying the specified path into
 // destDir, or using a configured command to create the target file(s) if the
-// specified source file has a command extension.
+// specified source file has a command extension and copyOnly is false.
 //
 // If the specified path is a directory, translate all its contents instead.
 //
@@ -1502,7 +1501,7 @@ final class Exe : Binary {
 // categories before adding them - thus copied files have a lower number than
 // generated ones.
 //
-void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
+void translateFile(ref Origin origin, Pkg pkg, string name, string dest, bool copyOnly) {
 
     string destDir  = dest == "" ? buildPath("priv", pkg.trail) : buildPath("dist", dest);
     string destOmit = "";
@@ -1530,7 +1529,7 @@ void translateFile(ref Origin origin, Pkg pkg, string name, string dest) {
         }
         else {
             // file - collect it
-            if (relative.extension !in generateRules) {
+            if (copyOnly || relative.extension !in generateRules) {
                 copiedRels ~= relative;
             }
             else {
@@ -1711,13 +1710,26 @@ void processBubfile(string indent, Pkg pkg, int maxTestSecs) {
             }
             break;
 
+            case "copy":
+            {
+                foreach (name; statement.targets) {
+                    translateFile(statement.origin,
+                             pkg,
+                             name,
+                             statement.arg1.length == 0 ? "" : statement.arg1[0],
+                             true);
+                }
+            }
+            break;
+
             case "translate":
             {
                 foreach (name; statement.targets) {
                     translateFile(statement.origin,
                                   pkg,
                                   name,
-                                  statement.arg1.length == 0 ? "" : statement.arg1[0]);
+                                  statement.arg1.length == 0 ? "" : statement.arg1[0],
+                                  false);
                 }
             }
             break;

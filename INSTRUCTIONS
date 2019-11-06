@@ -344,11 +344,15 @@ is deleted if the test passes.
 Scripts, data and docs
 ~~~~~~~~~~~~~~~~~~~~~~
 
+# copy-only
+copy      names [: dist-destination-path];
+
+# copy/translate
 translate names [: dist-destination-path];
 
-Copies or (if there is a rule to translate files from the extension)
-produces files that do not contribute to libraries or executables.
-If any of names is a directory, it is recursed into.
+Copies or (if translate statement is used and there is a rule to translate
+files from the extension) produces files that do not contribute to libraries
+or executables. If any of names is a directory, it is recursed into.
 
 For example:
 
@@ -358,6 +362,9 @@ translate foo.sh foo2.sh : bin;
 # copy/build index.rst into priv/<chain> and files in doc dir and below
 # into priv/<chain>/doc, preserving any subdirectory structure.
 translate index.rst doc;
+
+# copy data files into priv/chain, ignoring any translate rules.
+copy data;
 
 Source files can be generated this way too, but they are usually generated
 by adding the file that will be translated into the source file to a
