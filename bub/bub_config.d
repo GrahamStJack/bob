@@ -1,5 +1,5 @@
 /*
- * Copyright 2012-2017, Graham St Jack.
+ * Copyright 2012-2020, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -59,7 +59,6 @@ version(Posix) {
 
     // Make a symbolic link
     private void makeSymlink(string dest, string linkname) {
-        writefln("making link %s to %s", linkname, dest);
         symlink(dest, linkname);
     }
 
@@ -75,8 +74,6 @@ version(Windows) {
 
     // Make a symbolic link
     private void makeSymlink(string dest, string linkname) {
-        writefln("making link %s to %s", linkname, dest);
-
         string command = format("mklink /D %s %s", linkname, dest);
         int ret = std.c.process.system(toStringz(command));
         assert(ret == 0, format("Failed to execute: %s", command));
@@ -97,7 +94,7 @@ version(Windows) {
 //
 
 alias string[][string] Vars;      // variable items by variable name
-alias string[string]   Locations; // path by name
+alias string[string]   Locations; // path by repo or root-name/component-name
 
 
 //
@@ -242,8 +239,8 @@ void establishBuildDir(string          exeName,
     }
 
     //
-    // Create src directory with symbolic links to all top-level packages in all
-    // specified repositories.
+    // Create src directory with a subdirectory for each root and a symlink to all
+    // top-level packages, and a repos directory with a symlink to each repo
     //
 
     // Make clean repos and src dirs
@@ -264,18 +261,25 @@ void establishBuildDir(string          exeName,
         makeSymlink(repoPath, buildPath(localReposPath, name));
     }
 
-    // Make a symbolic link to each top-level package
-    foreach (name, path; packages) {
-        makeSymlink(buildNormalizedPath(srcDir, path), buildPath(localSrcPath, name));
+    // Make a dir for each root and symbolic links in those dirs to the top-level packages
+    string prevRoot;
+    string[string] texts; // partial Bubfile text by dir
+    foreach (key; pkgNames) {
+        auto path = packages[key];
+        auto root = key.dirName;
+        if (root != prevRoot) {
+            texts[""] ~= " " ~ root;
+            mkdir(buildPath(localSrcPath, root));
+            prevRoot = root;
+        }
+        texts[root] ~= " " ~ key.baseName;
+        makeSymlink(buildNormalizedPath(srcDir, path), buildPath(localSrcPath, key));
     }
 
-    // Create the top-level Bubfile
-    string contain = "contain";
-    foreach (name; pkgNames) {
-        contain ~= " " ~ name;
+    // Create the generated Bubfiles
+    foreach (key, text; texts) {
+        update(buildPath(localSrcPath, key, "Bubfile"), "contain" ~ text ~ ";\n", false);
     }
-    contain ~= ";\n";
-    update(buildPath(localSrcPath, "Bubfile"), contain, false);
 
     // print success
     writefln("Build environment in %s is ready to roll.", buildDir);
@@ -391,20 +395,17 @@ void parseBundle(string           bundle,
                 auto name  = tokens[0].strip;
                 auto items = tokens[1].split;
 
-                enforce(name == "BUNDLES" || name == "REPO" || name == "ROOT" || name == "CONTAIN",
+                enforce(name == "REPO" || name == "ROOT" || name == "CONTAIN",
                         "A bundle file can only contain BUNDLES, REPO, ROOT or CONTAIN variables - not '" ~ name ~ "'");
 
-                if (name == "BUNDLES") {
-                    foreach (item; items) {
-                        parseBundle(buildNormalizedPath(bundle.dirName, item),
-                                    repos, packages, pkgNames, bundlesDone, verbose);
-                    }
-                }
-                else if (name == "REPO") {
+                if (name == "REPO") {
                     enforce(repo == "", "Only one REPO variable is allowed per bundle file");
                     enforce(items.length == 1, "Exactly one value must be provided in a REPO variable");
-                    if (items[0] !in repos) {
-                        repo = buildNormalizedPath(bundle.dirName, items[0]);
+                    repo = buildNormalizedPath(bundle.dirName, items[0]);
+                    auto already = repo.baseName in repos;
+                    enforce(already is null || repo == *already,
+                            format("Found repo %s at both %s and %s", repo.baseName, repo, *already));
+                    if (already is null) {
                         enforce(repo.isDir,
                                 "Can't find dir " ~ repo ~
                                 " - REPO value must be relative path to a repo directory " ~ repo);
@@ -426,10 +427,11 @@ void parseBundle(string           bundle,
                         enforce(path.isDir,
                                 "Can't find dir " ~ path ~
                                 " - CONTAIN values must be directory names under ROOT " ~ root);
-                        enforce(item !in packages, "Duplicate CONTAIN " ~ item);
-                        packages[item] = path;
-                        pkgNames ~= item;
-                        if (verbose) { writefln("Contain top-level package %s at %s", item, path); }
+                        string key = buildPath(root.baseName, item);
+                        enforce(key !in packages, "Duplicate CONTAIN " ~ item);
+                        packages[key] = path;
+                        pkgNames ~= key;
+                        if (verbose) { writefln("Contain top-level package %s at %s", key, path); }
                     }
                 }
                 else {
@@ -618,6 +620,16 @@ void parseConfig(string        configFile,
     foreach (bundle; initialBundles) {
         parseBundle(bundle.absolutePath.buildNormalizedPath, repos, packages, pkgNames, bundlesDone, true);
     }
+
+    // Set up ROOTS var
+    bool[string] roots;
+    foreach (key; pkgNames) {
+        auto root = key.dirName;
+        if (root !in roots) {
+            roots[root] = true;
+            vars["ROOTS"] ~= root;
+        }
+    }
 }
 
 
@@ -632,13 +644,8 @@ int performCheck() {
         writefln("Cannot find %s - this doesn't look like a build directory", optionsPath);
         return 1;
     }
-    string bubfilePath = buildPath("src", "Bubfile");
-    if (!bubfilePath.exists) {
-        writefln("Cannot find %s - this doesn't look like a build directory", bubfilePath);
-        return 1;
-    }
 
-    // Read the configuration file's path from the Bubfile
+    // Read the configuration file's path from Buboptions
     string configPath;
     foreach (line; optionsPath.readText.splitLines) {
         string[] tokens = line.split;
@@ -681,24 +688,53 @@ int performCheck() {
         parseBundle(buildNormalizedPath(configPath.dirName, bundle), repos, packages, pkgNames, done, false);
     }
 
-    string expected = "contain";
-    foreach (name; pkgNames) {
-        expected ~= " " ~ name;
-    }
-    expected ~= ";";
-
-    // Read the top-level Bubfile's package names
-    string[] content = bubfilePath.readText.splitLines;
-
-    if (content.length != 1) {
-        writefln("%s has the wrong number of lines (expected 1)\n\n", bubfilePath);
-        return 1;
+    string[] roots;
+    string[][string] packagesByRoot;
+    foreach (key; pkgNames) {
+        if (key.dirName !in packagesByRoot) {
+            roots ~= key.dirName;
+        }
+        packagesByRoot[key.dirName] ~= key.baseName;
     }
 
-    // And here is the check we really want to do - did the list of packages change?
-    if (content[0] != expected) {
-        writefln("%s is out of date\n\nExpected\n%s\n\nGot\n%s\n\n", bubfilePath, expected, content[0]);
+    // Confirm that the two top layers of Bubfiles match packagesByRoot
+
+    bool verify(string dir, string[] expected) {
+        string bubfilePath = buildPath(dir, "Bubfile");
+        if (!bubfilePath.exists) {
+            writefln("Cannot find %s", bubfilePath);
+            return false;
+        }
+
+        string[] content = bubfilePath.readText.splitLines;
+
+        if (content.length != 1) {
+            writefln("%s has the wrong number of lines (expected 1)\n\n", bubfilePath);
+            return false;
+        }
+
+        string text = "contain";
+        foreach (item; expected) {
+            text ~= " " ~ item;
+        }
+        text ~= ";";
+
+        // And here is the check we really want to do - is the list of packages as expected?
+        if (content[0] != text) {
+            writefln("%s is out of date\n\nExpected\n%s\n\nGot\n%s\n\n", bubfilePath, text, content[0]);
+            return false;
+        }
+
+        return true;
+    }
+
+    if (!verify("src", roots)) {
         return 1;
+    }
+    foreach (dir, names; packagesByRoot) {
+        if (dir != "" && !verify(buildPath("src", dir), names)) {
+            return 1;
+        }
     }
 
     return 0;

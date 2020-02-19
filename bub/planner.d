@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2017, Graham St Jack.
+ * Copyright 2012-2020, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -22,6 +22,7 @@ module bub.planner;
 import bub.parser;
 import bub.support;
 
+import std.array;
 import std.algorithm;
 import std.ascii;
 import std.file;
@@ -624,11 +625,12 @@ final class Pkg : Node {
 //
 class File : Node {
     static DependencyCache cache;       // Cache of information gleaned from ${DEPS} in commands
+    static string[string]  shortPaths;  // Used includable/importable paths
     static File            options;     // The Buboptions file, which all actions depend on
     static File[]          ordered;     // Files in increasing "number" order
     static File[string]    byPath;      // Files by their path
-    static bool[File]      allBuilt;    // all built files
-    static bool[File]      outstanding; // outstanding buildable files
+    static bool[File]      allBuilt;    // All built files
+    static bool[File]      outstanding; // Outstanding buildable files
     static int             nextNumber;
 
     // Statistics
@@ -672,6 +674,15 @@ class File : Node {
             ++numBuilt;
             allBuilt[this] = true;
             outstanding[this] = true;
+        }
+
+        if (path.extension in [".d":true, ".h":true, ".hpp":true, ".hh":true, ".hxx":true, ".idl":true, ".ipc":true]) {
+            auto elements = path.pathSplitter.array;
+            if (elements.length > 2 && elements[0] in ["src":true, "gen":true]) {
+                string shortPath = buildPath(elements[2..$]);
+                errorUnless(shortPath !in shortPaths, origin, "%s conflicts with %s", path, shortPaths[shortPath]);
+                shortPaths[shortPath] = path;
+            }
         }
     }
 
@@ -2198,6 +2209,7 @@ bool doPlanning(Tid[] workerTids, string dotPath, int maxTestSecs, string arg0) 
             }
             auto rc = executeShell(bubConfig ~ " --check");
             if (rc.status != 0) {
+                say("%s", rc.output);
                 fatal("\nThe build directory's configuration is STALE - you need to re-configure the build directory");
             }
         }

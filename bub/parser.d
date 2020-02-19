@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2017, Graham St Jack.
+ * Copyright 2012-2020, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -160,7 +160,10 @@ void readOptions() {
     }
 
     // Hard-coded options
-    options["PROJ_INC"] = "src gen .";
+    foreach (root; options["ROOTS"].split) {
+        options["PROJ_INC"] ~= buildPath("src", root) ~ " " ~ buildPath("gen", root) ~ " ";
+    }
+    options["PROJ_INC"] ~= ".";
     options["PROJ_LIB"] = buildPath("dist", "lib") ~ " obj";
 }
 
