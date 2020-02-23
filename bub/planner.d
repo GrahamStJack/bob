@@ -398,10 +398,11 @@ final class Action {
     // replaced with the content of the named variable, cross-multiplied with
     // any adjacent text.
     // Special variables are:
-    //   INPUT  -> Paths of the input files.
-    //   DEPS   -> Path to a temporary dependencies file.
-    //   OUTPUT -> Paths of the built files.
-    //   LIBS   -> Names of all required libraries, without lib prefix or extension.
+    //   INPUT      -> Paths of the input files.
+    //   DEPS       -> Path to a temporary dependencies file.
+    //   OUTPUT     -> Paths of the built files.
+    //   OUTPUT_DIR -> Path of the directory of the built files (if just one).
+    //   LIBS       -> Names of all required libraries, without lib prefix or extension.
     string resolveCommandProvidingExtras(string deps = "") {
         string[string] extras;
 
@@ -422,11 +423,16 @@ final class Action {
         }
 
         {
+            bool[string] dirs;
             string value;
             foreach (file; builds) {
                 value ~= " " ~ file.path;
+                dirs[file.path.dirName] = true;
             }
             extras["OUTPUT"] = strip(value);
+            if (dirs.length == 1) {
+                extras["OUTPUT_DIR"] = dirs.keys[0];
+            }
         }
 
         {
