@@ -91,22 +91,20 @@ void readOptions() {
             string key   = strip(tokens[0]);
             string value = strip(tokens[1]);
 
-            if (key[0] == '.') {
+            if (key[0] == '.' || key[0] == '_') {
                 // A command of some sort
 
-                string[] extensions = split(key);
-                if (extensions.length < 2) {
-                    fatal("Rules require at least two extensions: %s", line);
+                string[] suffixes = split(key);
+                if (suffixes.length < 2) {
+                    fatal("Rules require at least two suffixes: %s", line);
                 }
-                string   input   = extensions[0];
-                string[] outputs = extensions[1 .. $];
+                string   input   = suffixes[0];
+                string[] outputs = suffixes[1 .. $];
 
                 errorUnless(input !in reservedExts, origin,
                             "Cannot use %s as source ext in rules", input);
 
                 if (outputs[0] == ".obj") {
-                    errorUnless(input !in compileRules && input !in generateRules,
-                                origin, "Multiple compile/generate rules using %s", input);
                     compileRules[input] = Rule(outputs, value);
                 }
                 else if (outputs[0] == ".slib") {
@@ -123,8 +121,8 @@ void readOptions() {
                 }
                 else {
                     // A generate command
-                    errorUnless(input !in compileRules && input !in generateRules,
-                                origin, "Multiple compile/generate rules using %s", input);
+                    errorUnless(input !in generateRules,
+                                origin, "Multiple generate rules using %s", input);
                     foreach (ext; outputs) {
                         errorUnless(ext !in reservedExts, origin,
                                     "Cannot use %s in a generate command: %s", ext, line);

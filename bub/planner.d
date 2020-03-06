@@ -969,9 +969,37 @@ abstract class Binary : File {
 
             // Look for a command to do something with the source file.
 
-            auto compile  = ext in compileRules;
-            auto generate = ext in generateRules;
+            foreach (key, rule; generateRules) {
+                if (name.endsWith(key)) {
+                    // Generate more source files from sourceFile.
+                    File[] files;
+                    string suffixes;
+                    foreach (suffix; rule.suffixes) {
+                        string destName = name.stripExtension ~ suffix;
+                        string destPath = buildPath("gen", parent.trail, destName);
+                        File gen = new File(origin, this, destName, privacy, destPath, true);
+                        files    ~= gen;
+                        suffixes ~= suffix ~ " ";
+                    }
+                    Action genAction = new Action(origin,
+                                                pkg,
+                                                makeActionName(key ~ "->" ~ suffixes, files[0].path),
+                                                rule.command,
+                                                files,
+                                                [sourceFile]);
+                    genAction.setGenerate();
+                    foreach (gen; files) {
+                        gen.action = genAction;
+                    }
 
+                    // And add them as sources too.
+                    foreach (gen; files) {
+                        addSource(gen.name, privacy);
+                    }
+                }
+            }
+
+            auto compile = ext in compileRules;
             if (compile !is null) {
                 // Compile an object file from this source.
 
@@ -1006,34 +1034,6 @@ abstract class Binary : File {
                     }
                 }
                 obj.action.setSysLibCompileFlags(flags.keys);
-            }
-            else if (generate !is null) {
-                // Generate more source files from sourceFile.
-
-                File[] files;
-                string suffixes;
-                foreach (suffix; generate.suffixes) {
-                    string destName = stripExtension(name) ~ suffix;
-                    string destPath = buildPath("gen", parent.trail, destName);
-                    File gen = new File(origin, this, destName, privacy, destPath, true);
-                    files    ~= gen;
-                    suffixes ~= suffix ~ " ";
-                }
-                Action genAction = new Action(origin,
-                                              pkg,
-                                              makeActionName(ext ~ "->" ~ suffixes, files[0].path),
-                                              generate.command,
-                                              files,
-                                              [sourceFile]);
-                genAction.setGenerate();
-                foreach (gen; files) {
-                    gen.action = genAction;
-                }
-
-                // And add them as sources too.
-                foreach (gen; files) {
-                    addSource(gen.name, privacy);
-                }
             }
 
             if (privacy == Privacy.PUBLIC) {
