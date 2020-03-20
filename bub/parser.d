@@ -32,6 +32,7 @@ import std.string;
 import std.process;
 import std.algorithm;
 import std.exception;
+import std.conv;
 
 static import std.array;
 
@@ -42,6 +43,7 @@ static import std.array;
 
 // General variables
 string[string] options;
+int            defaultTestSecs = 60;
 
 // Build options
 // Rules to generate files other than reserved extensions
@@ -158,11 +160,23 @@ void readOptions() {
     }
 
     // Hard-coded options
+
     foreach (root; options["ROOTS"].split) {
         options["PROJ_INC"] ~= buildPath("src", root) ~ " " ~ buildPath("gen", root) ~ " ";
     }
     options["PROJ_INC"] ~= ".";
     options["PROJ_LIB"] = buildPath("dist", "lib") ~ " obj";
+
+    auto str = getOption("TEST");
+    if (!str.empty) {
+        try {
+            defaultTestSecs = to!int(str);
+            //say("Set default test timeout threshold to %s", defaultTestSecs);
+        }
+        catch (Exception) {
+            fatal("Failed to interpret TEST value of '%s' as an integer", str);
+        }
+    }
 }
 
 

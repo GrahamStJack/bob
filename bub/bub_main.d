@@ -1,5 +1,5 @@
 /**
- * Copyright 2012-2017, Graham St Jack.
+ * Copyright 2012-2020, Graham St Jack.
  *
  * This file is part of bub, a software build tool.
  *
@@ -73,7 +73,7 @@ int main(string[] args) {
         bool clean           = false;
         bool help            = false;
         uint numJobs         = 1;
-        int  testSecs        = 60;
+        int  testSecs        = -1;
 
         try {
             getopt(args,
@@ -118,7 +118,7 @@ int main(string[] args) {
                 "  --dot=<path>     write dependency graph for dist-exe at <path> to depends.dot\n" ~
                 "  --details        print heaps of details\n" ~
                 "  --jobs=VALUE     maximum number of simultaneous actions (default is 1)\n" ~
-                "  --test=SECS      execute tests with timeout <= SECS (default is 60)\n" ~
+                "  --test=SECS      execute tests with timeout <= SECS (default is TEST or 60)\n" ~
                 "  --clean          just remove all built files\n" ~
                 "  --help           show this message\n" ~
                 "target is everything contained in the project Bubfile and anything referred to.");
@@ -187,6 +187,9 @@ int main(string[] args) {
         g_print_deps    = printDeps;
         g_print_culprit = printCulprit;
         g_print_details = printDetails;
+        if (testSecs == -1) {
+            testSecs = defaultTestSecs;
+        }
 
         // Run the pre-build script if one is specified, passing it any unprocessed command-line arguments
         auto unprocessed = args[1..$];

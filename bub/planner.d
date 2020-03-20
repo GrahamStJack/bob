@@ -1697,7 +1697,7 @@ void processBubfile(string indent, Pkg pkg, int maxTestSecs) {
                 errorUnless(statement.targets.length == 1,
                             statement.origin,
                             "Can only have one exe name per statement");
-                int testSecs = 60; // default timeout for tests
+                int testSecs = 60; // tests default to 60 secs timeout rather than the usual 300
                 if (statement.rule == "test-exe") {
                     if (statement.arg3.length > 0) {
                         try {
@@ -1713,6 +1713,7 @@ void processBubfile(string indent, Pkg pkg, int maxTestSecs) {
 
                 if (statement.rule == "test-exe" && testSecs > maxTestSecs) {
                     // Suppress execution of the test
+                    //say("Suppressing execution of test %s", statement.targets);
                     statement.rule = "priv-exe";
                 }
 
