@@ -171,45 +171,52 @@ class Killer {
         struct Info {
             string   action;
             Had      had;
-            Duration untilSigTerm;
-            Duration untilSigKill;
+            Duration untilNextStep;
 
             this(string action, Duration duration) {
-                this.action = action;
-                had          = Had.nothing;
-                untilSigTerm  = duration;
+                this.action   = action;
+                had           = Had.nothing;
+                untilNextStep = duration;
             }
 
-            // Do what this child is due for
-            void doWhatIsDue(Pid child, Duration interval) {
+            // Advance to the next step if there is one
+            void takeNextStep(Pid child, bool timeout) {
                 if (had == Had.nothing) {
-                    untilSigTerm -= interval;
-                    if (untilSigTerm <= 0.seconds) {
-                        //say("Raising SIGTERM on [%s]", action);
-                        untilSigKill = 2.seconds;
-                        had         = Had.term;
-                        kill(child.processID, SIGTERM);
+                    if (timeout) {
+                        say("Timeout on [%s]", action);
                     }
+                    untilNextStep = 6.seconds;
+                    had           = Had.term;
+                    kill(child.processID, SIGTERM);
                 }
                 else if (had == had.term) {
-                    untilSigKill -= interval;
-                    if (untilSigKill <= 0.seconds) {
-                        say("Raising SIGKILL on [%s]", action);
-                        had = Had.kill;
-                        kill(child.processID, SIGKILL);
-                    }
+                    say("Raising SIGKILL on [%s]", action);
+                    had = Had.kill;
+                    kill(child.processID, SIGKILL);
                 }
             }
 
+            // Do what this child is due for, returning true if a timeout occurred
+            bool doWhatIsDue(Pid child, Duration interval) {
+                if (had == Had.kill) return false;
+                untilNextStep -= interval;
+                if (untilNextStep <= 0.seconds) {
+                    takeNextStep(child, true);
+                    return true;
+                }
+                return false;
+            }
+
+            // Start down the path of terminating this child if we haven't already
             void terminate(Pid child) {
                 if (had == Had.nothing) {
-                    untilSigTerm = 0.seconds;
-                    doWhatIsDue(child, 0.seconds);
+                    takeNextStep(child, false);
                 }
             }
         }
 
         bool      bailed;
+        bool      timeout;
         Info[Pid] children;
     }
 
@@ -234,7 +241,9 @@ class Killer {
     bool periodic(Duration interval) {
         synchronized(this) {
             foreach (child, ref info; children) {
-                info.doWhatIsDue(child, interval);
+                if (info.doWhatIsDue(child, interval)) {
+                    timeout = true;
+                }
             }
             return children.length > 0;
         }
@@ -254,6 +263,12 @@ class Killer {
             else {
                 return false;
             }
+        }
+    }
+
+    bool timeoutOccurred() {
+        synchronized(this) {
+            return timeout;
         }
     }
 }
@@ -299,6 +314,9 @@ void doBailer() {
         Thread.sleep(interval);
     }
     while (killer.periodic(interval));
+    if (killer.timeoutOccurred) {
+        say("******** Command timed out ********");
+    }
 }
 
 extern (C) void mySignalHandler(int sig) nothrow @nogc @system {
