@@ -2204,7 +2204,7 @@ void flushFileList() {
 //
 bool doPlanning(Tid[] workerTids, string dotPath, int maxTestSecs, string arg0) {
 
-    int needed;
+    bool failed;
     try {
         // Verify that the build directory's configuration is up to date
         {
@@ -2327,10 +2327,10 @@ bool doPlanning(Tid[] workerTids, string dotPath, int maxTestSecs, string arg0) 
             }
         }
     }
-    catch (BailException ex) {}
-    catch (Exception ex) { say("Unexpected exception %s", ex.msg); }
+    catch (BailException ex) { failed = true; }
+    catch (Exception ex) { failed = true; say("Unexpected exception %s", ex.msg); }
 
-    if (File.outstanding.length == 0) {
+    if (!failed && File.outstanding.length == 0) {
         // Success
 
         // Flush the dependency information now that we know everything
