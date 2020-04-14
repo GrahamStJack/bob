@@ -114,7 +114,7 @@ final class SysLib {
 //   library or executable are up to date, the then-current dependencies of those
 //   object files are used to determine which libraries to link with. That is, it
 //   establishes new dependencies on the libraries, which may cause the build of
-//   the dynamic library or executable to be delayed.
+//   the dynamic library or executable to be further delayed.
 //
 
 enum string depsDir    = "deps";
@@ -701,7 +701,7 @@ class File : Node {
 
         string name = extra.replace("/", "__");
 
-        File * file = path1 in byPath;
+        File* file = path1 in byPath;
         if (file) {
             // this is a built source file we already know about
             errorUnless(!file.used, origin, "%s has already been used", path1);
@@ -847,7 +847,7 @@ class File : Node {
             if (!wait) {
                 // Complete and issue the action, regardless of whether this file is dirty or not.
                 // When the action is taken off the priority queue, it is given to a worker if dirty,
-                // and otherwise upTodate() is called. We do this because calling upToDate() here
+                // and otherwise upToDate() is called. We do this because calling upToDate() here
                 // would cause unboundedly deep recursion.
                 action.complete();
                 accumulateCompletedCommand(action);
@@ -874,7 +874,8 @@ class File : Node {
         Node commonAncestor = commonAncestorWith(other);
 
         errorUnless(this.number > other.number ||
-                    (this.parent == other.parent && this.privacy == Privacy.PUBLIC && other.privacy == Privacy.SEMI_PROTECTED) ||
+                    (this.parent == other.parent &&
+                     this.privacy == Privacy.PUBLIC && other.privacy == Privacy.SEMI_PROTECTED) ||
                     other.isDescendantOf(this),
                     origin,
                     "%s cannot depend on later-defined %s",
@@ -1392,22 +1393,22 @@ final class DynamicLib : File {
         foreach (trail; staticTrails) {
             string trail1 = buildPath(pkg.trail, trail, baseName(trail));
             string trail2 = buildPath(pkg.trail, trail);
-            Node* node = trail1 in Node.byTrail;
-            if (node is null || cast(StaticLib*) node is null) {
+            auto node = trail1 in Node.byTrail;
+            if (node is null || cast(StaticLib) *node is null) {
                 node = trail2 in Node.byTrail;
-                if (node is null || cast(StaticLib*) node is null) {
+                if (node is null || cast(StaticLib) *node is null) {
                     error(origin,
                           "Unknown static-lib %s, looked for with trails %s and %s",
                           trail, trail1, trail2);
                 }
             }
-            StaticLib* staticLib = cast(StaticLib*) node;
-            errorUnless(*staticLib !in byContent, origin,
+            auto staticLib = cast(StaticLib) *node;
+            errorUnless(staticLib !in byContent, origin,
                         "static lib %s already used by dynamic lib %s",
-                        *staticLib, byContent[*staticLib]);
-            checkCanDepend(*staticLib);
-            staticLibs ~= *staticLib;
-            byContent[*staticLib] = this;
+                        staticLib, byContent[staticLib]);
+            checkCanDepend(staticLib);
+            staticLibs ~= staticLib;
+            byContent[staticLib] = this;
 
             sourceExt = validateExtension(origin, staticLib.sourceExt, sourceExt);
         }
