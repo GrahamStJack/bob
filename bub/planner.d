@@ -753,10 +753,6 @@ class File : Node {
         modTime = path.modifiedTime(true);
         if (g_print_deps) say("Updated %s", this);
 
-        // Remove this built file's cached dependencies so that we won't have stale ones
-        // in a subsequent run if the checks below fail
-        cache.remove(path);
-
         // Extract updated dependency information from action.depsPath,
         // validate it, and update the cache.
         // We don't actually update the action's dependencies here, because they apply to the
@@ -2291,6 +2287,15 @@ bool doPlanning(Tid[] workerTids, string dotPath, int maxTestSecs, string arg0) 
                         say("%s", next.name);
                     }
                     workerTids[index].send(next.name, next.command, targets, to!string(next.secs));
+
+                    // Remove the built file cached dependencies so that we won't have stale
+                    // dependencies in a subsequent run if the build fails or (more importantly)
+                    // we are abruptly killed while the work is in progress. Having no cached
+                    // dependencies will also force the action to be re-issued even if
+                    // the built files are present - which would possibly be incomplete.
+                    foreach (target; next.builds) {
+                        File.cache.remove(target.path);
+                    }
                 }
                 else {
                     // The action doesn't need to be performed - mark all its targets as up to date,
