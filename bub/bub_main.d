@@ -144,7 +144,7 @@ int main(string[] args) {
                     }
                 }
             }
-            rm(["tmp", "obj", "priv", "deps", "dist"]);
+            rm(["tmp", "gen", "obj", "priv", "deps", "dist"]);
             return 0;
         }
 

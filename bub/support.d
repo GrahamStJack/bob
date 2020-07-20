@@ -38,7 +38,7 @@ import std.string;
 import std.concurrency;
 
 import core.time;
-import core.bitop;
+import core.volatile;
 import core.thread;
 
 import core.sys.posix.signal;
