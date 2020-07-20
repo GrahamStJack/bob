@@ -456,14 +456,15 @@ void parseConfig(string        configFile,
 
     enum Section { none, defines, modes, syslibCompileFlags, syslibLinkFlags, environment }
 
-    Vars[string] fragments;
-    Vars         modes;
-    Vars*        fragment;
+    Vars[string]   fragments;
+    Vars           modes;
+    Vars*          fragment;
+    string[string] syslibCompileFlags;
+    string[string] syslibLinkFlags;
 
     Section section = Section.none;
     string  commandType;
     size_t  syslibNum;
-
 
     if (!exists(configFile)) {
         writefln("Could not file config file %s", configFile);
@@ -477,8 +478,6 @@ void parseConfig(string        configFile,
 
         // Skip comment lines.
         if (!line.length || line[0] == '#') continue;
-
-        //writefln("Processing line: %s", line);
 
         if (line.length && line[0] == '[' && line[$-1] == ']') {
             // Start of a section
@@ -555,15 +554,7 @@ void parseConfig(string        configFile,
                 case Section.syslibCompileFlags: {
                     string[] tokens = line.split(" =");
                     if (tokens.length == 2) {
-                        string[] options = evaluate(tokens[1].strip, vars).split;
-                        // Replace any "-I with "-isystem" so that warnings will be ignored in
-                        // system headers
-                        foreach (ref option; options) {
-                            if (option.startsWith("-I")) {
-                                option = "-isystem" ~ option[2..$];
-                            }
-                        }
-                        vars.append("syslib-compile-flags " ~ tokens[0].strip, options, AppendType.notExist);
+                        syslibCompileFlags[tokens[0].strip] = tokens[1].strip;
                     }
                     break;
                 }
@@ -571,8 +562,7 @@ void parseConfig(string        configFile,
                 case Section.syslibLinkFlags: {
                     string[] tokens = line.split(" =");
                     if (tokens.length == 2) {
-                        string[] options = evaluate(tokens[1].strip, vars).split;
-                        vars.append("syslib-link-flags " ~ tokens[0].strip, options, AppendType.notExist);
+                        syslibLinkFlags[tokens[0].strip] = tokens[1].strip;
                     }
                     break;
                 }
@@ -609,6 +599,23 @@ void parseConfig(string        configFile,
             writefln("Applying mode fragment %s %s %s %s", name, adding ? "adding-to" : "setting", var, values);
             append(vars, var, values, adding ? AppendType.mustExist : AppendType.notExist);
         }
+    }
+
+    // Evaluate compile and link flags now that the mode consequences are known
+    foreach (key, value; syslibCompileFlags) {
+        string[] options = evaluate(value, vars).split;
+        // Replace any "-I with "-isystem" so that warnings will be ignored in
+        // system headers
+        foreach (ref option; options) {
+            if (option.startsWith("-I")) {
+                option = "-isystem" ~ option[2..$];
+            }
+        }
+        vars.append("syslib-compile-flags " ~ key, options, AppendType.notExist);
+    }
+    foreach (key, value; syslibLinkFlags) {
+        string[] options = evaluate(value, vars).split;
+        vars.append("syslib-link-flags " ~ key, options, AppendType.notExist);
     }
 
     enforce("BUNDLES" in vars && vars["BUNDLES"].length, "BUNDLES variable is not set or is empty");
