@@ -32,6 +32,7 @@ import std.string;
 import std.process;
 import std.concurrency;
 import std.conv;
+import std.datetime;
 
 static import std.array;
 
@@ -749,6 +750,13 @@ class File : Node {
 
     // This file has been updated
     final void updated(string[] inputs) {
+        if (g_touch) {
+            // Touch the file to work around buggy filesystems that mess up mtime when moving files.
+            // encfs is guilty of this.
+            auto now = Clock.currTime();
+            path.setTimes(now, now);
+        }
+
         ++numUpdated;
         modTime = path.modifiedTime(true);
         if (g_print_deps) say("Updated %s", this);

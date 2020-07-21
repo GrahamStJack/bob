@@ -69,6 +69,7 @@ int main(string[] args) {
         bool printCulprit    = false;
         bool printDetails    = false;
         bool printActions    = false;
+        bool touch           = false;
         string dotPath;
         bool clean           = false;
         bool help            = false;
@@ -83,6 +84,7 @@ int main(string[] args) {
                    "culprit",        &printCulprit,
                    "details|v",      &printDetails,
                    "actions|a",      &printActions,
+                   "touch",          &touch,
                    "dot",            &dotPath,
                    "jobs|j",         &numJobs,
                    "test|t",         &testSecs,
@@ -115,6 +117,7 @@ int main(string[] args) {
                 "  --deps           print dependencies\n" ~
                 "  --culprit        add dirtying dependency to normal output\n" ~
                 "  --actions        print actions\n" ~
+                "  --touch          touch built files after they are updated\n" ~
                 "  --dot=<path>     write dependency graph for dist-exe at <path> to depends.dot\n" ~
                 "  --details        print heaps of details\n" ~
                 "  --jobs=VALUE     maximum number of simultaneous actions (default is 1)\n" ~
@@ -187,6 +190,7 @@ int main(string[] args) {
         g_print_deps    = printDeps;
         g_print_culprit = printCulprit;
         g_print_details = printDetails;
+        g_touch         = touch;
         if (testSecs == -1) {
             testSecs = defaultTestSecs;
         }
