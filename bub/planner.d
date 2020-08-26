@@ -225,9 +225,8 @@ final class Action {
             addDependency(dep);
         }
 
-        // All the files built by this action depend on the package's Bubfile and on Buboptions
+        // All the files built by this action depend on Buboptions
         depends ~= File.options;
-        addDependency(pkg.bubfile);
 
         // Recognise in-project tools in the command.
         // FIXME make this also work for tool names inside variables
@@ -672,6 +671,16 @@ class File : Node {
         number    = nextNumber++;
 
         modTime   = path.modifiedTime(built);
+        if (!built && parent !is null && name != "Buboptions") {
+            // Source file's effective modTime is greater than or equal to it's Bubfile's.
+            auto pkg = Pkg.getPkgOf(parent);
+            if (pkg.bubfile !is null) {
+                auto bubfileTime = pkg.bubfile.path.modifiedTime(false);
+                if (bubfileTime > modTime) {
+                    modTime = bubfileTime;
+                }
+            }
+        }
 
         errorUnless(path !in byPath, origin, "%s already defined", path);
         ordered     ~= this;
