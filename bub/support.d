@@ -460,3 +460,23 @@ bool g_print_deps;
 bool g_print_culprit;
 bool g_print_details;
 bool g_touch;
+
+// Return the real path of a file, resolving all symlinks.
+string realPath(string path) {
+    auto result = path.absolutePath;
+    // Resolve all symlinks
+    bool symlinks = true;
+    while (symlinks) {
+        string workingPath;
+        symlinks = false;
+        foreach (string pathSegment; result.pathSplitter) {
+            workingPath = buildPath(workingPath, pathSegment);
+            if (workingPath.exists && workingPath.isSymlink) {
+                workingPath = buildPath(workingPath.dirName, workingPath.readLink);
+                symlinks = true;
+            }
+        }
+        result = workingPath;
+    }
+    return result;
+}

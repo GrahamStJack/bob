@@ -417,9 +417,15 @@ final class Action {
         {
             string value;
             foreach (file; inputs) {
-                value ~= " " ~ file.path;
+                if (file.path.extension in compileRules || file.path.extension in generateRules) {
+                    value ~= " " ~ file.path.realPath;
+                }
+                else {
+                    value ~= " " ~ file.path;
+                }
             }
-            extras["INPUT"] = strip(value);
+
+            extras["INPUT"] = value.strip;
         }
 
         {
@@ -1970,9 +1976,9 @@ void flushCompilerCommands() {
         }
         content ~=
             "\n" ~
-            "{ \"directory\": \"" ~ dir ~ "\",\n" ~
+            "{ \"directory\": \"" ~ dir.realPath ~ "\",\n" ~
             "  \"command\":   \"" ~ command.replace(`\`, `\\`).replace(`"`, `\"`) ~ "\",\n" ~
-            "  \"file\":      \"" ~ f.path ~ "\" }";
+            "  \"file\":      \"" ~ f.path.realPath ~ "\" }";
         first = false;
     }
     content ~= "\n]";

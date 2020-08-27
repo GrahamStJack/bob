@@ -162,9 +162,9 @@ void readOptions() {
     // Hard-coded options
 
     foreach (root; options["ROOTS"].split) {
-        options["PROJ_INC"] ~= buildPath("src", root) ~ " " ~ buildPath("gen", root) ~ " ";
+        options["PROJ_INC"] ~= buildPath("src", root).realPath ~ " " ~ buildPath("gen", root).realPath ~ " ";
     }
-    options["PROJ_INC"] ~= ".";
+    options["PROJ_INC"] ~= ".".realPath;
     options["PROJ_LIB"] = buildPath("dist", "lib") ~ " obj";
 
     auto str = getOption("TEST");
@@ -195,7 +195,7 @@ string getOption(string key) {
 //
 // Return a fully resolved command by transitively replacing its ${<option>} tokens
 // with tokens from options, extras or environment, cross-multiplying with adjacent text.
-// After all that is done, add sysLibFlags
+// After all that is done, add sysLibFlags.
 //
 string resolveCommand(string command, string[string] extras, string[] sysLibFlags) {
     //say("resolving command %s with extras=%s", command, extras);
