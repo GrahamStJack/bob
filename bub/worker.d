@@ -158,9 +158,11 @@ void doWork(bool printActions, uint index) {
                     say("\n%s", readText(failurePath));
                 }
                 else {
-                    // For non-tests, attempt to provide demangled versions of symbol names.
+                    // For non-tests, attempt to provide demangled versions of symbol names
+                    // and convert relative paths to realPaths.
                     say("\n");
-                    foreach (line; readText(resultsPath).splitLines()) {
+                    foreach (rawLine; readText(resultsPath).splitLines()) {
+                        string line = substitutePathWithRealPath(rawLine);
                         say("%s", line);
                         string[] tokens = line.split();
                         foreach (token; tokens) {

@@ -25,6 +25,7 @@ module bub.parser;
 
 import bub.support;
 
+import std.array;
 import std.ascii;
 import std.file;
 import std.path;
@@ -161,10 +162,11 @@ void readOptions() {
 
     // Hard-coded options
 
-    foreach (root; options["ROOTS"].split) {
-        options["PROJ_INC"] ~= buildPath("src", root).realPath ~ " " ~ buildPath("gen", root).realPath ~ " ";
+    foreach (rootStr; options["ROOTS"].split) {
+        auto tokens = rootStr.split("=");
+        options["PROJ_INC"] ~= buildPath("src", tokens[0]) ~ " " ~ buildPath("gen", tokens[0]) ~ " ";
     }
-    options["PROJ_INC"] ~= ".".realPath;
+    options["PROJ_INC"] ~= ".";
     options["PROJ_LIB"] = buildPath("dist", "lib") ~ " obj";
 
     auto str = getOption("TEST");
@@ -312,7 +314,10 @@ string resolveCommand(string command, string[string] extras, string[] sysLibFlag
 // Note that spaces in paths are only supported in the first format.
 //
 string[] parseDeps(string path, string[] inputs) {
-    string[] deps;
+    bool[string] result;
+    foreach (input; inputs) {
+        result[input] = true;
+    }
 
     if (path.exists) {
         auto content = path.readText;
@@ -329,22 +334,43 @@ string[] parseDeps(string path, string[] inputs) {
             }
         }
 
-        if (parens) {
-            // The paths are enclosed in parentheses
-            size_t anchor;
-            bool   inWord;
-            foreach (i, ch; content) {
-                if (ch == '(') {
-                    enforce(!inWord);
-                    inWord = true;
-                    anchor = i + 1;
+        string[] deps;
+        string   cwd = getcwd ~ dirSeparator;
+
+        // Add candidate to result if it is in-project
+        void addCandidate(string candidate) {
+            string abs = buildNormalizedPath(cwd, candidate);
+            if (abs.startsWith(cwd)) {
+                string rel = abs[cwd.length..$];
+                if (rel.startsWith("src" ~ dirSeparator) ||
+                    rel.startsWith("gen" ~ dirSeparator) ||
+                    rel.dirName == ".")
+                {
+                    result[rel.idup] = true;
                 }
-                else if (ch == ')') {
-                    enforce(inWord);
-                    inWord = false;
-                    if (i > anchor) {
-                        deps ~= content[anchor..i].dup;
+            }
+        }
+
+        if (parens) {
+            // The paths are enclosed in the last set of parens on a line
+            foreach (line; content.splitLines) {
+                size_t anchor;
+                bool   inWord;
+                string token;
+                foreach (i, ch; line) {
+                    if (ch == '(') {
+                        enforce(!inWord);
+                        inWord = true;
+                        anchor = i + 1;
                     }
+                    else if (ch == ')') {
+                        enforce(inWord);
+                        inWord = false;
+                        token = line[anchor..i];
+                    }
+                }
+                if (token.length > 0) {
+                    addCandidate(token);
                 }
             }
         }
@@ -368,34 +394,16 @@ string[] parseDeps(string path, string[] inputs) {
                 else if (inWord && (ch.isWhite || ch == '\\')) {
                     inWord = false;
                     enforce(i > anchor);
-                    deps ~= content[anchor..i].dup;
+                    addCandidate(content[anchor..i]);
                 }
             }
             if (inWord) {
-                deps ~= content[anchor..$].dup;
+                addCandidate(content[anchor..$]);
             }
         }
     }
 
-    // Remove duplicates and out-of-project paths, then return the result
-    bool[string] got;
-    foreach (input; inputs) {
-        got[input] = true;
-    }
-    string cwd = getcwd ~ dirSeparator;
-    foreach (dep; deps) {
-        string abs = buildNormalizedPath(cwd, dep);
-        if (abs.startsWith(cwd)) {
-            string rel = abs[cwd.length..$];
-            if (rel.startsWith("src" ~ dirSeparator) ||
-                rel.startsWith("gen" ~ dirSeparator) ||
-                rel.dirName == ".")
-            {
-                got[rel] = true;
-            }
-        }
-    }
-    return got.keys();
+    return result.keys.sort.array;
 }
 
 

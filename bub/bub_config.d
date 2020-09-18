@@ -94,7 +94,7 @@ version(Windows) {
 //
 
 alias string[][string] Vars;      // variable items by variable name
-alias string[string]   Locations; // path by repo or root-name/component-name
+alias string[string]   Locations; // repo, root or package name by path
 
 
 //
@@ -376,16 +376,18 @@ string evaluate(string text, const ref Vars vars) {
 //
 void parseBundle(string           bundle,
                  ref Locations    repos,
+                 ref Locations    roots,
                  ref Locations    packages,
-                 ref string[]     pkgNames,
+                 ref string[]     packageNames,
                  ref bool[string] bundlesDone,
                  bool             verbose) {
     if (bundle !in bundlesDone) {
         bundlesDone[bundle] = true;
         if (verbose) { writefln("Incorporating bundle at %s", bundle); }
 
-        string repo;
-        string root;
+        string repoPath;
+        string rootPath;
+        string rootName;
 
         foreach (string line; bundle.readText.splitLines) {
             if (!line.length || line[0] == '#') continue;
@@ -396,42 +398,45 @@ void parseBundle(string           bundle,
                 auto items = tokens[1].split;
 
                 enforce(name == "REPO" || name == "ROOT" || name == "CONTAIN",
-                        "A bundle file can only contain BUNDLES, REPO, ROOT or CONTAIN variables - not '" ~ name ~ "'");
+                        "A bundle file can only contain REPO, ROOT or CONTAIN variables - not '" ~ name ~ "'");
 
                 if (name == "REPO") {
-                    enforce(repo == "", "Only one REPO variable is allowed per bundle file");
+                    enforce(repoPath == "", "Only one REPO variable is allowed per bundle file");
                     enforce(items.length == 1, "Exactly one value must be provided in a REPO variable");
-                    repo = buildNormalizedPath(bundle.dirName, items[0]);
-                    auto already = repo.baseName in repos;
-                    enforce(already is null || repo == *already,
-                            format("Found repo %s at both %s and %s", repo.baseName, repo, *already));
+                    repoPath = buildNormalizedPath(bundle.dirName, items[0]);
+                    auto repoName = repoPath.baseName;
+                    auto already = repoName in repos;
+                    enforce(already is null || repoPath == *already,
+                            format("Found repo %s at both %s and %s", repoName, repoPath, *already));
                     if (already is null) {
-                        enforce(repo.isDir,
-                                "Can't find dir " ~ repo ~
-                                " - REPO value must be relative path to a repo directory " ~ repo);
-                        repos[repo.baseName] = repo;
-                        if (verbose) { writefln("Added repo %s at %s", repo.baseName, repo); }
+                        enforce(repoPath.isDir,
+                                "Can't find dir " ~ repoPath ~
+                                " - REPO value must be relative path to a repo directory " ~ repoPath);
+                        repos[repoName] = repoPath;
+                        if (verbose) { writefln("Added repo %s at %s", repoName, repoPath); }
                     }
                 }
                 else if (name == "ROOT") {
-                    enforce (root == "", "Only one ROOT variable allowed per bundle file");
+                    enforce (rootPath == "", "Only one ROOT variable allowed per bundle file");
                     enforce(items.length == 1, "Exactly one value must be provided in a ROOT variable");
-                    enforce(repo != "", "Cannot specify ROOT before REPO");
-                    root = buildNormalizedPath(bundle.dirName, items[0]);
+                    enforce(repoPath != "", "Cannot specify ROOT before REPO");
+                    rootPath = buildNormalizedPath(bundle.dirName, items[0]);
+                    rootName = rootPath.baseName;
+                    roots[rootName] = rootPath;
                 }
                 else if (name == "CONTAIN") {
-                    enforce(root != "", "Connot specify CONTAIN before ROOT");
+                    enforce(rootPath != "", "Connot specify CONTAIN before ROOT");
                     foreach (item; items) {
                         enforce(item.dirName == ".", "CONTAIN values must be simple names");
-                        auto path = buildPath(root, item);
-                        enforce(path.isDir,
-                                "Can't find dir " ~ path ~
-                                " - CONTAIN values must be directory names under ROOT " ~ root);
-                        string key = buildPath(root.baseName, item);
-                        enforce(key !in packages, "Duplicate CONTAIN " ~ item);
-                        packages[key] = path;
-                        pkgNames ~= key;
-                        if (verbose) { writefln("Contain top-level package %s at %s", key, path); }
+                        auto packagePath = buildPath(rootPath, item);
+                        enforce(packagePath.isDir,
+                                "Can't find dir " ~ packagePath ~
+                                " - CONTAIN values must be directory names under ROOT " ~ rootPath);
+                        string packageName = buildPath(rootName, item);
+                        enforce(packageName !in packages, "Duplicate CONTAIN " ~ item);
+                        packages[packageName] = packagePath;
+                        packageNames ~= packageName;
+                        if (verbose) { writefln("Contain top-level package %s at %s", packageName, packagePath); }
                     }
                 }
                 else {
@@ -450,8 +455,9 @@ void parseConfig(string        configFile,
                  string        mode,
                  ref Vars      vars,
                  ref Locations repos,
+                 ref Locations roots,
                  ref Locations packages,
-                 ref string[]  pkgNames,
+                 ref string[]  packageNames,
                  ref Vars      env) {
 
     enum Section { none, defines, modes, syslibCompileFlags, syslibLinkFlags, environment }
@@ -625,17 +631,12 @@ void parseConfig(string        configFile,
     // Transitively parse the bundle files
     bool[string] bundlesDone;
     foreach (bundle; initialBundles) {
-        parseBundle(bundle.absolutePath.buildNormalizedPath, repos, packages, pkgNames, bundlesDone, true);
+        parseBundle(bundle.absolutePath.buildNormalizedPath, repos, roots, packages, packageNames, bundlesDone, true);
     }
 
     // Set up ROOTS var
-    bool[string] roots;
-    foreach (key; pkgNames) {
-        auto root = key.dirName;
-        if (root !in roots) {
-            roots[root] = true;
-            vars["ROOTS"] ~= root;
-        }
+    foreach (rootName, rootPath; roots) {
+        vars["ROOTS"] ~= rootName ~ "=" ~ rootPath;
     }
 }
 
@@ -684,27 +685,7 @@ int performCheck() {
         return 1;
     }
 
-    // Read the bundles files
-
-    Locations    repos;
-    Locations    packages;
-    string[]     pkgNames;
-    bool[string] done;
-
-    foreach (bundle; bundles) {
-        parseBundle(buildNormalizedPath(configPath.dirName, bundle), repos, packages, pkgNames, done, false);
-    }
-
-    string[] roots;
-    string[][string] packagesByRoot;
-    foreach (key; pkgNames) {
-        if (key.dirName !in packagesByRoot) {
-            roots ~= key.dirName;
-        }
-        packagesByRoot[key.dirName] ~= key.baseName;
-    }
-
-    // Confirm that the two top layers of Bubfiles match packagesByRoot
+    // Read the bundles files and confirm that the two top layers of Bubfiles are as expected
 
     bool verify(string dir, string[] expected) {
         string bubfilePath = buildPath(dir, "Bubfile");
@@ -735,11 +716,35 @@ int performCheck() {
         return true;
     }
 
-    if (!verify("src", roots)) {
+    Locations    repos;
+    Locations    roots;
+    Locations    packages;
+    string[]     packageNames;
+    bool[string] done;
+
+    foreach (bundle; bundles) {
+        parseBundle(buildNormalizedPath(configPath.dirName, bundle), repos, roots, packages, packageNames, done, false);
+    }
+
+    string[]         firstLayerExpected;
+    string[][string] secondLayerExpected;
+    bool[string]     haveRoot;
+    foreach (packageName; packageNames) {
+        string root = packageName.dirName;
+        string pkg  = packageName.baseName;
+        if (root !in haveRoot) {
+            haveRoot[root] = true;
+            firstLayerExpected ~= root;
+            secondLayerExpected[root] = [];
+        }
+        secondLayerExpected[root] ~= pkg;
+    }
+
+    if (!verify("src", firstLayerExpected)) {
         return 1;
     }
-    foreach (dir, names; packagesByRoot) {
-        if (dir != "" && !verify(buildPath("src", dir), names)) {
+    foreach (dir, names; secondLayerExpected) {
+        if (!verify(buildPath("src", dir), names)) {
             return 1;
         }
     }
@@ -803,8 +808,9 @@ int main(string[] args) {
 
     Vars      vars;
     Locations repos;
+    Locations roots;
     Locations packages;
-    string[]  pkgNames;
+    string[]  packageNames;
     Vars      env;
 
     vars["BUILD_PATH"] = [buildDir];
@@ -814,8 +820,8 @@ int main(string[] args) {
                AppendType.mayExist);
     env.append("SYSTEM_DATA_PATH", [buildPath("${BUILD_PATH}", "dist", "data")], AppendType.mayExist);
 
-    parseConfig(configFile, mode, vars, repos, packages, pkgNames, env);
-    establishBuildDir(args[0], mode, configFile, buildDir, srcDir, vars, repos, packages, pkgNames, env);
+    parseConfig(configFile, mode, vars, repos, roots, packages, packageNames, env);
+    establishBuildDir(args[0], mode, configFile, buildDir, srcDir, vars, repos, packages, packageNames, env);
 
     auto postConfigure = "POST_CONFIGURE" in vars;
     if (postConfigure) {

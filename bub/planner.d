@@ -417,14 +417,8 @@ final class Action {
         {
             string value;
             foreach (file; inputs) {
-                if (file.path.extension in compileRules || file.path.extension in generateRules) {
-                    value ~= " " ~ file.path.realPath;
-                }
-                else {
-                    value ~= " " ~ file.path;
-                }
+                value ~= " " ~ file.path;
             }
-
             extras["INPUT"] = value.strip;
         }
 
@@ -780,14 +774,15 @@ class File : Node {
         // validate it, and update the cache.
         // We don't actually update the action's dependencies here, because they apply to the
         // next bub run - but we have to make sure that they will be valid then.
-        string[] deps = parseDeps(action.depsPath, inputs);
+        string[] depPaths = parseDeps(action.depsPath, inputs);
         bool[string] isInput;
         foreach (input; inputs) isInput[input] = true;
-        foreach (dep; deps) {
-            if (!dep.isAbsolute && dep.dirName != "." && dep !in isInput && dep != path) {
-                // dep is an in-project source file not in "." that isn't one of the inputs or this file
-                File* depend = dep in File.byPath;
-                errorUnless(depend !is null, origin, "%s depends on unknown '%s'", this, dep);
+        foreach (depPath; depPaths) {
+            if (!depPath.isAbsolute && depPath.dirName != "." && depPath !in isInput) {
+                // depPath is an in-project source file not in "." that isn't one of the inputs.
+                // Check that it is ok to depend on it.
+                File* depend = depPath in File.byPath;
+                errorUnless(depend !is null, origin, "%s depends on unknown '%s'", this, depPath);
                 if (g_print_deps && this !in depend.dependedBy) {
                     say("After update, %s will depend on %s", this, *depend);
                 }
@@ -796,7 +791,7 @@ class File : Node {
         }
 
         // Success - put new information back into cache
-        cache.update(path, deps);
+        cache.update(path, depPaths);
 
         upToDate();
     }
@@ -869,7 +864,6 @@ class File : Node {
                 // and otherwise upToDate() is called. We do this because calling upToDate() here
                 // would cause unboundedly deep recursion.
                 action.complete();
-                accumulateCompletedCommand(action);
                 action.issue(dirty, reason);
             }
         }
@@ -1910,11 +1904,16 @@ void accumulateCompletedCommand(Action action) {
         pkgDepends[targetPkg] = null;
         depends = targetPkg in pkgDepends;
     }
-    foreach (depend; action.depends) {
-        if (depend.path != "Buboptions") { // Buboptions breaks the dependency rules, and is uninteresting anyway
-            auto dependPkg = Pkg.getPkgOf(depend);
-            if (dependPkg !is targetPkg) {
-                (*depends)[dependPkg] = true;
+    foreach (file; action.builds) {
+        foreach (dependPath; File.cache.dependencies[file.path]) {
+            if (dependPath != "Buboptions") { // Buboptions breaks the dependency rules, and is uninteresting anyway
+                auto depend = dependPath in File.byPath;
+                if (depend !is null) {
+                    auto dependPkg = Pkg.getPkgOf(*depend);
+                    if (dependPkg !is targetPkg) {
+                        (*depends)[dependPkg] = true;
+                    }
+                }
             }
         }
     }
@@ -1926,10 +1925,13 @@ void accumulateCompletedCommand(Action action) {
             binaryDepends[targetBinary] = null;
             libs = targetBinary in binaryDepends;
         }
-        foreach (depend; action.depends) {
-            StaticLib lib = cast(StaticLib) depend;
-            if (lib !is null && lib !is targetBinary) {
-                (*libs)[lib] = true;
+        foreach (dependPath; File.cache.dependencies[targetBinary.path]) {
+            auto depend = dependPath in File.byPath;
+            if (depend !is null) {
+                StaticLib lib = cast(StaticLib) *depend;
+                if (lib !is null && lib !is targetBinary) {
+                    (*libs)[lib] = true;
+                }
             }
         }
     }
@@ -1971,6 +1973,14 @@ void flushCompilerCommands() {
     bool first = true;
     foreach_reverse (f; commands.keys.sort) {
         string command = commands[f];
+        command = command.substitutePathWithRealPath();
+        foreach (rootStr; options["ROOTS"].split) {
+            auto tokens = rootStr.split("=");
+            auto rootName = tokens[0];
+            auto rootPath = tokens[1];
+            auto from = buildPath("src", rootName);
+            command = command.replace(from, rootPath);
+        }
         if (!first) {
             content ~= ",";
         }
@@ -2324,6 +2334,7 @@ bool doPlanning(Tid[] workerTids, string dotPath, int maxTestSecs, string arg0) 
                     // The action doesn't need to be performed - mark all its targets as up to date,
                     // which will either put more actions on the queue or clean out outstanding.
                     auto action = Action.byName[next.name];
+                    accumulateCompletedCommand(action);
                     foreach (target; action.builds) {
                         target.upToDate();
                     }
@@ -2338,15 +2349,17 @@ bool doPlanning(Tid[] workerTids, string dotPath, int maxTestSecs, string arg0) 
             if (idle.length != workerTids.length) {
                 // We have workers on the job - wait for one of them to report back
                 receive(
-                    (uint index, string action) {
+                    (uint index, string actionName) {
+                        auto action = Action.byName[actionName];
                         idle.insert(index);
                         string[] inputs;
-                        foreach (file; Action.byName[action].inputs) {
+                        foreach (file; action.inputs) {
                             inputs ~= file.path;
                         }
-                        foreach (file; Action.byName[action].builds) {
+                        foreach (file; action.builds) {
                             file.updated(inputs);
                         }
+                        accumulateCompletedCommand(action);
                     },
                     (bool dummy) {
                         fatal("Aborting due to action failure.");

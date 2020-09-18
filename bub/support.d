@@ -480,3 +480,37 @@ string realPath(string path) {
     }
     return result;
 }
+
+// Return a version of 'text' with all paths that look like 'src/*/*' replaced with
+// realPath(path).
+string substitutePathWithRealPath(string text) {
+    enum Phase { none, s, r, c, slashOne, slashTwo }
+
+    string result;
+    string path;
+    Phase phase = Phase.none;
+
+    foreach (i, ch; text) {
+        path    ~= ch;
+        bool end = i == text.length - 1 || ch == ' ' || ch == ':';
+
+        if      (phase == Phase.none     && ch == 's') { phase = Phase.s; }
+        else if (phase == Phase.s        && ch == 'r') { phase = Phase.r; }
+        else if (phase == Phase.r        && ch == 'c') { phase = Phase.c; }
+        else if (phase == Phase.c        && ch == '/') { phase = Phase.slashOne; }
+        else if (phase == Phase.slashOne && ch == '/') { phase = Phase.slashTwo; }
+        else if (phase == Phase.slashOne && !end)      {}
+        else if (phase == Phase.slashTwo && !end)      {}
+        else if (phase == Phase.slashTwo &&  end)      { path = path.realPath; phase = Phase.none; }
+        else if (phase == Phase.slashTwo &&  end)      { path = path.realPath; phase = Phase.none; }
+        else                                           { phase = Phase.none; }
+
+        if (phase == Phase.none) {
+            result ~= path;
+            path.length = 0;
+        }
+    }
+    result ~= path;
+
+    return result;
+}
